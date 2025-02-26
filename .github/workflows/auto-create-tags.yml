@@ -1,0 +1,249 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+name: Auto Create Tags
+
+on:
+  workflow_run:
+    workflows: ["Auto Create or Update Changelogs"]
+    types:
+      - completed
+    branches:
+      - prod-v1
+
+# Prevent multiple instances of this workflow from running simultaneously
+concurrency:
+  group: auto-create-tags-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel running jobs, just queue them
+
+permissions:
+  contents: write  # Required to create and push tags
+  actions: read    # Required to access workflow information
+
+jobs:
+  create-tags:
+    name: Create Version Tags
+    runs-on: ubuntu-latest
+    # Only run if the changelog workflow completed successfully
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      created-tags: ${{ steps.create.outputs.created-tags }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history to compare versions
+        token: ${{ secrets.GITHUB_TOKEN }}
+        # Ensure we get the complete history including previous commits
+        ref: ${{ github.sha }}
+    
+    - name: Configure git user
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+    
+    - name: Debug git state
+      run: |
+        echo "Current branch: $(git branch --show-current)"
+        echo "Current commit: $(git rev-parse HEAD)"
+        echo "Commit count: $(git rev-list --count HEAD)"
+        echo "Available refs:"
+        git log --oneline -5 || echo "No commits found"
+    
+    - name: Create tags for changed versions
+      id: create
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # Colors for output
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        NC='\033[0m'
+        
+        print_error() {
+            echo -e "${RED}ERROR: $1${NC}" >&2
+        }
+        
+        print_success() {
+            echo -e "${GREEN}SUCCESS: $1${NC}"
+        }
+        
+        print_warning() {
+            echo -e "${YELLOW}WARNING: $1${NC}"
+        }
+        
+        print_info() {
+            echo -e "${BLUE}INFO: $1${NC}"
+        }
+        
+        print_info "Processing all VERSION files to create tags..."
+        
+        # Get current commit
+        current_commit=$(git rev-parse HEAD)
+        
+        # Always process all VERSION files regardless of changes
+        applications_to_process=()
+        
+        print_info "Scanning all application VERSION files..."
+        for version_file in application/*/VERSION; do
+            if [ -f "$version_file" ]; then
+                application_name=$(basename $(dirname "$version_file"))
+                applications_to_process+=("$application_name")
+                print_info "Found VERSION file for application: $application_name"
+            fi
+        done
+        
+        if [ ${#applications_to_process[@]} -eq 0 ]; then
+            print_info "No VERSION files found in any applications. No tags to create."
+            exit 0
+        fi
+        
+        print_info "Applications to process: ${applications_to_process[*]}"
+        
+        # Create tags for each application based on current VERSION files
+        tags_created=()
+        tags_skipped=()
+        
+        for application in "${applications_to_process[@]}"; do
+            version_file="application/$application/VERSION"
+            
+            if [ ! -f "$version_file" ]; then
+                print_warning "VERSION file not found for $application, skipping"
+                continue
+            fi
+            
+            # Get current version
+            current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+            
+            # Validate version format
+            if ! [[ $current_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                print_error "Invalid version format in $version_file: $current_version"
+                continue
+            fi
+            
+            # Create tag name (using best practice format)
+            tag_name="${application}/v${current_version}"
+            
+            print_info "Processing $application version $current_version..."
+            
+            # Check if tag already exists
+            if git tag -l | grep -q "^$tag_name$"; then
+                print_info "Tag $tag_name already exists, skipping"
+                tags_skipped+=("$tag_name (already exists)")
+                continue
+            fi
+            
+            print_info "Creating tag for $application version $current_version..."
+            
+            # Get recent commits for this application to include in tag message
+            application_commit_messages=()
+            
+            # Get the last 5 commits that modified this application
+            recent_commits=$(git log --format="%H" --oneline -10 -- "application/$application/")
+            
+            while IFS= read -r commit; do
+                if [ -n "$commit" ]; then
+                    commit_hash=$(echo "$commit" | cut -d' ' -f1)
+                    commit_msg=$(git log --format="%s" -n 1 "$commit_hash")
+                    short_sha=$(git rev-parse --short "$commit_hash")
+                    
+                    # Skip auto-generated changelog commits
+                    if [[ ! $commit_msg =~ ^docs\($application\):.*Changelog\ for\ Version ]]; then
+                        application_commit_messages+=("- $commit_msg ($short_sha)")
+                        
+                        # Limit to 5 commits for readability
+                        if [ ${#application_commit_messages[@]} -ge 5 ]; then
+                            break
+                        fi
+                    fi
+                fi
+            done <<< "$recent_commits"
+            
+            # Create tag message
+            if [ ${#application_commit_messages[@]} -gt 0 ]; then
+                tag_message="$application version $current_version"$'\n\n'"Recent changes:"
+                for msg in "${application_commit_messages[@]}"; do
+                    tag_message+=$'\n'"$msg"
+                done
+            else
+                tag_message="$application version $current_version"$'\n\n'"Tagged from VERSION file"
+            fi
+            
+            # Create the tag
+            if git tag -a "$tag_name" -m "$tag_message" $current_commit; then
+                print_success "Created tag: $tag_name"
+                tags_created+=("$tag_name")
+                # Mark that tags were created and store the tag name
+                echo "true" > /tmp/tags_created
+                echo "$tag_name" >> /tmp/created_tags_list
+                
+                # Push the tag to remote
+                if git push origin "$tag_name"; then
+                    print_success "Pushed tag: $tag_name"
+                else
+                    print_error "Failed to push tag: $tag_name"
+                fi
+            else
+                print_error "Failed to create tag: $tag_name"
+            fi
+        done
+        
+        # Create summary
+        echo "## 🏷️ Auto Tag Creation Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ ${#tags_created[@]} -gt 0 ]; then
+            echo "### ✅ Tags Created:" >> $GITHUB_STEP_SUMMARY
+            for tag in "${tags_created[@]}"; do
+                echo "- \`$tag\`" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ ${#tags_skipped[@]} -gt 0 ]; then
+            echo "### ⏭️ Tags Skipped:" >> $GITHUB_STEP_SUMMARY
+            for tag in "${tags_skipped[@]}"; do
+                echo "- \`$tag\`" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "**Summary:** Created ${#tags_created[@]} tags, skipped ${#tags_skipped[@]} tags" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Tag Format:** \`{application}/v{version}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Behavior:** Always processes all VERSION files (skips existing tags)" >> $GITHUB_STEP_SUMMARY
+        echo "**Trigger:** Automatic after changelog workflow completes on prod-v1" >> $GITHUB_STEP_SUMMARY
+        
+        # Output created tags for downstream workflows
+        if [ ${#tags_created[@]} -gt 0 ]; then
+            # Convert array to JSON for GitHub Actions output
+            created_tags_json="["
+            for i in "${!tags_created[@]}"; do
+                if [ $i -gt 0 ]; then
+                    created_tags_json="${created_tags_json},"
+                fi
+                created_tags_json="${created_tags_json}\"${tags_created[$i]}\""
+            done
+            created_tags_json="${created_tags_json}]"
+            
+            echo "created-tags=$created_tags_json" >> $GITHUB_OUTPUT
+            # Create artifact with created tags for downstream workflows
+            echo "$created_tags_json" > created-tags.json
+            print_success "Successfully created ${#tags_created[@]} tags"
+            print_info "Created tags JSON: $created_tags_json"
+        else
+            echo "created-tags=[]" >> $GITHUB_OUTPUT
+            # Create artifact with empty array for downstream workflows
+            echo "[]" > created-tags.json
+            print_info "No new tags created - no dispatch event needed"
+        fi
+    
+    - name: Upload created tags artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: created-tags
+        path: created-tags.json

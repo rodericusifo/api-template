@@ -1,0 +1,31 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+syntax = "proto3";
+
+package auth;
+
+option go_package = "api-gateway/external/client/auth-service/http/grpc/proto/auth;auth";
+
+import "google/protobuf/empty.proto";
+
+service AuthHandler {
+    rpc LoginAuth (LoginAuthRequest) returns (LoginAuthResponse);
+    rpc RegisterAuth (RegisterAuthRequest) returns (google.protobuf.Empty);
+}
+
+message LoginAuthRequest {
+    string Email = 1 [json_name = "email"];
+    string Password = 2 [json_name = "password"];
+}
+
+message LoginAuthResponse {
+    string Token = 1 [json_name = "token"];
+}
+
+message RegisterAuthRequest {
+    string Name = 1 [json_name = "name"];
+    string Email = 2 [json_name = "email"];
+    string Password = 3 [json_name = "password"];
+    string RoleSlug = 4 [json_name = "role_slug"];
+}

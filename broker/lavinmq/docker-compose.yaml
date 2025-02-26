@@ -1,0 +1,184 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  lavinmq1:
+    image: cloudamqp/lavinmq:latest
+    hostname: lavinmq1
+    container_name: lavinmq1
+    ports:
+      - 5672:5672
+      - 5679:5679
+      - 15672:15672
+    volumes:
+      - lavinmq_data:/var/lib/lavinmq/data
+    configs:
+      - source: lavinmq_config
+        target: /etc/lavinmq/lavinmq.ini
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+    networks:
+      - backend
+
+  lavinmq2:
+    image: cloudamqp/lavinmq:latest
+    hostname: lavinmq2
+    container_name: lavinmq2
+    ports:
+      - 5673:5672
+      - 15679:5679
+      - 25672:15672
+    volumes:
+      - lavinmq_data:/var/lib/lavinmq/data
+    configs:
+      - source: lavinmq_config
+        target: /etc/lavinmq/lavinmq.ini
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+    networks:
+      - backend
+
+  lavinmq3:
+    image: cloudamqp/lavinmq:latest
+    hostname: lavinmq3
+    container_name: lavinmq3
+    ports:
+      - 5674:5672
+      - 25679:5679
+      - 35672:15672
+    volumes:
+      - lavinmq_data:/var/lib/lavinmq/data
+    configs:
+      - source: lavinmq_config
+        target: /etc/lavinmq/lavinmq.ini
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+    networks:
+      - backend
+
+  etcd1:
+    image: bitnami/etcd:latest
+    container_name: etcd1
+    ports:
+      - 2379:2379
+      - 2380:2380
+    environment:
+      - ETCD_NAME=etcd1
+      - ETCD_DATA_DIR=etcd_data:/var/lib/etcd1/data
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-0
+      - ALLOW_NONE_AUTHENTICATION=yes
+    volumes:
+      - etcd_data:/var/lib/etcd1/data
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD-SHELL", "sh", "-c", "ETCDCTL_API=3 etcdctl --endpoints=http://etcd1:2379 endpoint health | grep -q 'is healthy'" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  etcd2:
+    image: bitnami/etcd:latest
+    container_name: etcd2
+    ports:
+      - 12379:2379
+      - 12380:2380
+    environment:
+      - ETCD_NAME=etcd2
+      - ETCD_DATA_DIR=etcd_data:/var/lib/etcd2/data
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-0
+      - ALLOW_NONE_AUTHENTICATION=yes
+    volumes:
+      - etcd_data:/var/lib/etcd2/data
+    depends_on:
+      etcd1:
+        condition: service_started
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD-SHELL", "sh", "-c", "ETCDCTL_API=3 etcdctl --endpoints=http://etcd2:2379 endpoint health | grep -q 'is healthy'" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  etcd3:
+    image: bitnami/etcd:latest
+    container_name: etcd3
+    ports:
+      - 22379:2379
+      - 22380:2380
+    environment:
+      - ETCD_NAME=etcd3
+      - ETCD_DATA_DIR=etcd_data:/var/lib/etcd3/data
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-0
+      - ALLOW_NONE_AUTHENTICATION=yes
+    volumes:
+      - etcd_data:/var/lib/etcd3/data
+    depends_on:
+      etcd1:
+        condition: service_started
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD-SHELL", "sh", "-c", "ETCDCTL_API=3 etcdctl --endpoints=http://etcd3:2379 endpoint health | grep -q 'is healthy'" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+configs:
+  lavinmq_config:
+    content: |
+      [main]
+      default_user = ${BROKER_LAVINMQ_MAIN_DEFAULT_USER}
+      default_password = ${BROKER_LAVINMQ_MAIN_DEFAULT_PASSWORD}
+
+      [clustering]
+      enabled = true
+      bind = 0.0.0.0
+      etcd_endpoints = etcd1:2379,etcd2:12379,etcd3:22379
+
+volumes:
+  lavinmq_data:
+    external: true
+    name: ${SLUG}_lavinmq_data_${ENV}
+  etcd_data:
+    external: true
+    name: ${SLUG}_etcd_data_${ENV}
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}

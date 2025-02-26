@@ -1,0 +1,247 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+name: Auto Create Releases
+
+on:
+  repository_dispatch:
+    types: [docker-builds-completed]
+
+permissions:
+  contents: write  # Required to create tags and releases
+  actions: read    # Required to access workflow information
+
+jobs:
+  create-release:
+    name: Create Release with Version Table
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Configure git user
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Setup GitHub CLI
+      run: |
+        # GitHub CLI is pre-installed on GitHub runners, just configure it
+        echo "${{ secrets.BYPASS_PAT || secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+    
+    - name: Generate release tag and date
+      id: release_info
+      run: |
+        # Generate current date and time
+        current_date=$(date -u '+%Y-%m-%d')
+        current_time=$(date -u '+%H-%M-%S')
+        current_datetime_display=$(date -u '+%B %d, %Y at %H:%M:%S UTC')
+        
+        # Create release tag
+        release_tag="release-${current_date}_${current_time}"
+        
+        echo "Release tag: $release_tag"
+        echo "Release title: Release $current_datetime_display"
+        
+        # Set outputs
+        echo "release_tag=$release_tag" >> $GITHUB_OUTPUT
+        echo "release_title=Release $current_datetime_display" >> $GITHUB_OUTPUT
+        echo "current_date=$current_date" >> $GITHUB_OUTPUT
+        echo "current_time=$current_time" >> $GITHUB_OUTPUT
+    
+    - name: Get previous release tag
+      id: prev_release
+      run: |
+        # Get the previous release tag (if exists)
+        prev_release_tag=$(git tag -l "release-*" --sort=-version:refname | head -1 || echo "")
+        
+        if [ -n "$prev_release_tag" ]; then
+          echo "Previous release tag: $prev_release_tag"
+          echo "prev_tag=$prev_release_tag" >> $GITHUB_OUTPUT
+        else
+          echo "No previous release tag found"
+          echo "prev_tag=" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Generate version comparison table
+      id: version_table
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # Initialize table content
+        table_content="| Application | Old Version | New Version | Status | Changelog Link |\n"
+        table_content+="|-------------|-------------|-------------|--------|----------------|\n"
+        
+        # Get applications from api.mk file
+        if [ ! -f "api.mk" ]; then
+          echo "❌ Error: api.mk file not found in repository root"
+          echo "The api.mk file is required to determine which applications to include in the release"
+          exit 1
+        fi
+        
+        applications_line=$(grep "^APPLICATIONS" api.mk | head -1)
+        if [ -z "$applications_line" ]; then
+          echo "❌ Error: APPLICATIONS variable not found in api.mk"
+          echo "Please define APPLICATIONS in api.mk file with format: APPLICATIONS := app1 app2 app3"
+          exit 1
+        fi
+        
+        # Extract applications from the line (remove APPLICATIONS := and convert to array)
+        applications_string=$(echo "$applications_line" | sed 's/^APPLICATIONS[[:space:]]*:=[[:space:]]*//')
+        
+        if [ -z "$applications_string" ]; then
+          echo "❌ Error: APPLICATIONS variable is empty in api.mk"
+          echo "Please define applications in api.mk file with format: APPLICATIONS := app1 app2 app3"
+          exit 1
+        fi
+        
+        # Convert space-separated string to array
+        read -ra applications <<< "$applications_string"
+        echo "✅ Found applications in api.mk: ${applications[*]} (${#applications[@]} total)"
+        
+        # Get previous versions from git history if previous release exists
+        prev_tag="${{ steps.prev_release.outputs.prev_tag }}"
+        
+        for application in "${applications[@]}"; do
+          version_file="application/$application/VERSION"
+          changelog_file="application/$application/CHANGELOG.md"
+          
+          if [ -f "$version_file" ]; then
+            current_version=$(cat "$version_file" | tr -d '\n\r' | xargs)
+            
+            # Get old version from previous release tag if it exists
+            if [ -n "$prev_tag" ]; then
+              # Try to get the old version, but handle case where file didn't exist in previous release
+              if git show "$prev_tag:$version_file" >/dev/null 2>&1; then
+                old_version=$(git show "$prev_tag:$version_file" 2>/dev/null | tr -d '\n\r' | xargs)
+                # Double check that we got a non-empty version
+                if [ -z "$old_version" ]; then
+                  old_version="N/A"
+                fi
+              else
+                old_version="N/A"
+              fi
+            else
+              old_version="N/A"
+            fi
+            
+            # Determine status with icons
+            status_icon=""
+            
+            if [ "$old_version" = "N/A" ] || [ -z "$old_version" ]; then
+              status_icon="🆕 New"
+              old_version="N/A"  # Ensure it's properly displayed as N/A
+            elif [ "$old_version" != "$current_version" ]; then
+              # Compare versions (basic semantic version comparison)
+              if [ "$(printf '%s\n' "$old_version" "$current_version" | sort -V | tail -n1)" = "$current_version" ]; then
+                status_icon="⬆️ Upgrade"
+              else
+                status_icon="⬇️ Downgrade"
+              fi
+            else
+              status_icon="➡️ No Change"
+            fi
+            
+            # Create changelog link if file exists
+            changelog_link=""
+            if [ -f "$changelog_file" ]; then
+              changelog_link="[View](application/$application/CHANGELOG.md)"
+            else
+              changelog_link="N/A"
+            fi
+            
+            # Add row to table
+            table_content+="| $application | $old_version | $current_version | $status_icon | $changelog_link |\n"
+            
+            echo "Application: $application, Old: $old_version, New: $current_version, Status: $status_icon"
+          else
+            echo "Warning: VERSION file not found for $application"
+            table_content+="| $application | N/A | N/A | ❌ Missing | N/A |\n"
+          fi
+        done
+        
+        # Save table content to file for multi-line output
+        echo -e "$table_content" > /tmp/version_table.md
+        echo "Generated version table:"
+        cat /tmp/version_table.md
+    
+    - name: Create release tag
+      run: |
+        release_tag="${{ steps.release_info.outputs.release_tag }}"
+        
+        # Create and push the release tag
+        git tag -a "$release_tag" -m "Release tag for ${{ steps.release_info.outputs.release_title }}"
+        git push origin "$release_tag"
+        
+        echo "Created and pushed release tag: $release_tag"
+    
+    - name: Generate full release notes
+      id: release_notes
+      run: |
+        # Read the version table
+        version_table=$(cat /tmp/version_table.md)
+        
+        # Create comprehensive release notes
+        cat > /tmp/release_notes.md << EOF
+        ## 📦 Version Changes
+        
+        $version_table
+        
+        ## 🐳 Docker Images
+        
+        All applications have been built and pushed to:
+        - **Docker Hub**: \`${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }}-{application}:v{version}\`
+        - **GitHub Container Registry**: \`ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-{application}:v{version}\`
+        
+        ## 📝 Additional Information
+        
+        - **Release Date**: ${{ steps.release_info.outputs.release_title }}
+        - **Repository**: ${{ github.repository }}
+        - **Commit**: ${{ github.sha }}
+        - **Branch**: ${{ github.ref_name }}
+        
+        ## 🔧 Deployment Commands
+        
+        Pull the images:
+        \`\`\`bash
+        # Docker Hub
+        docker pull ${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }}-auth-service:latest
+        docker pull ${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }}-api-gateway:v1.0.0
+        
+        # GitHub Container Registry  
+        docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-auth-service:v1.0.0
+        docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-api-gateway:latest
+        \`\`\`
+        EOF
+        
+        echo "Generated release notes:"
+        cat /tmp/release_notes.md
+    
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.release_info.outputs.release_tag }}
+        release_name: ${{ steps.release_info.outputs.release_title }}
+        body_path: /tmp/release_notes.md
+        draft: false
+        prerelease: false
+    
+    - name: Print summary
+      run: |
+        echo "## 🎉 Release Created Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Release Tag**: \`${{ steps.release_info.outputs.release_tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Release Title**: ${{ steps.release_info.outputs.release_title }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Version Changes Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        cat /tmp/version_table.md >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔗 **View Release**: [Click here](https://github.com/${{ github.repository }}/releases/tag/${{ steps.release_info.outputs.release_tag }})" >> $GITHUB_STEP_SUMMARY

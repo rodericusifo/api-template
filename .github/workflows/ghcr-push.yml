@@ -1,0 +1,318 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+name: Push to GitHub Container Registry
+
+on:
+  workflow_run:
+    workflows: ["Auto Create Tags"]
+    types:
+      - completed
+    branches:
+      - prod-v1
+
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+jobs:
+  # Job to find all recent tags
+  find-tags:
+    name: Find Recent Tags
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      tags: ${{ steps.extract.outputs.tags }}
+      no_tags_created: ${{ steps.extract.outputs.no_tags_created }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history including tags
+
+      - name: Download created tags artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: created-tags
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Get newly created tags from artifact
+        id: extract
+        run: |
+          echo "Getting newly created tags from artifact..."
+          
+          if [ -f "created-tags.json" ]; then
+            created_tags_json=$(cat created-tags.json)
+            echo "Found created-tags artifact: $created_tags_json"
+            
+            # Validate JSON format
+            if echo "$created_tags_json" | jq empty 2>/dev/null; then
+              # Extract individual tags from JSON array
+              created_tags_array=$(echo "$created_tags_json" | jq -r '.[]' 2>/dev/null)
+              
+              applications_with_new_tags=()
+              if [ -n "$created_tags_array" ]; then
+                while IFS= read -r tag; do
+                  if [ -n "$tag" ] && [ "$tag" != "null" ]; then
+                    applications_with_new_tags+=("$tag")
+                    echo "  ✅ Found newly created tag: $tag"
+                  fi
+                done <<< "$created_tags_array"
+              else
+                echo "ℹ️ No tags were created by auto-create-tags workflow"
+              fi
+            else
+              echo "⚠️ Invalid JSON format in created-tags artifact"
+              applications_with_new_tags=()
+            fi
+          else
+            echo "⚠️ Could not find created-tags artifact"
+            applications_with_new_tags=()
+          fi
+          
+          echo ""
+          echo "📊 Final decision: Found ${#applications_with_new_tags[@]} applications to build"
+          
+          # Use the tags found from auto-create-tags output or fallback
+          if [ ${#applications_with_new_tags[@]} -eq 0 ]; then
+            echo "ℹ️ No newly created tags found"
+            echo "🛡️ This means:"
+            echo "   - Auto-create-tags workflow didn't create any new tags"
+            echo "   - All VERSION files matched existing tags (no version changes)"
+            echo "   - No new container images need to be built"
+            echo ""
+            echo "🚫 No Docker builds will be triggered"
+            created_tags_json="[]"
+          else
+            echo "✅ Found ${#applications_with_new_tags[@]} tags to build:"
+            printf '   - %s\n' "${applications_with_new_tags[@]}"
+            
+            # Convert to JSON array
+            created_tags_json="["
+            for i in "${!applications_with_new_tags[@]}"; do
+              if [ $i -gt 0 ]; then
+                created_tags_json="${created_tags_json},"
+              fi
+              created_tags_json="${created_tags_json}\"${applications_with_new_tags[$i]}\""
+            done
+            created_tags_json="${created_tags_json}]"
+            echo "🚀 Docker builds will be triggered for these applications"
+          fi
+          
+          echo ""
+          echo "Final created_tags_json: '$created_tags_json'"
+          
+          if [ -z "$created_tags_json" ] || [ "$created_tags_json" = "[]" ]; then
+            echo "ℹ️ No new tags were created by auto-create-tags workflow"
+            echo "created_tags_json=[]"
+            echo "Skipping GHCR push - no new images to build"
+            echo "tags=[]" >> $GITHUB_OUTPUT
+            echo "no_tags_created=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Found newly created tags: $created_tags_json"
+          
+          # Validate JSON format
+          if ! echo "$created_tags_json" | jq empty 2>/dev/null; then
+            echo "❌ Invalid JSON format in created_tags_json: $created_tags_json"
+            echo "tags=[]" >> $GITHUB_OUTPUT
+            echo "no_tags_created=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          recent_tags=$(echo "$created_tags_json" | jq -r '.[]' | tr '\n' ' ')
+          echo "Tags to process: $recent_tags"
+          
+          # Process newly created tags and create matrix
+          tag_matrix=()
+          
+          echo "Processing newly created tags:"
+          for tag in $recent_tags; do
+            if [ -n "$tag" ] && [ "$tag" != "null" ]; then
+              echo "Processing tag: $tag"
+              
+              # Extract application name and version
+              if [[ $tag == *"/"* ]]; then
+                application_name=$(echo "$tag" | cut -d'/' -f1)
+                version=$(echo "$tag" | cut -d'/' -f2)  # Keep 'v' prefix intact
+                
+                # Validate application directory exists
+                if [ -d "application/$application_name" ]; then
+                  tag_matrix+=("{\"tag\":\"$tag\",\"application\":\"$application_name\",\"version\":\"$version\"}")
+                  echo "✅ Added $application_name ($version) to build matrix"
+                else
+                  echo "⚠️ Skipping $application_name - directory not found"
+                fi
+              else
+                echo "⚠️ Skipping tag $tag - invalid format (expected: app/version)"
+              fi
+            fi
+          done
+          
+          # Convert array to JSON
+          if [ ${#tag_matrix[@]} -eq 0 ]; then
+            echo "❌ No valid applications found to build"
+            echo "tags=[]" >> $GITHUB_OUTPUT
+            echo "no_tags_created=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          tags_json="[$(IFS=','; echo "${tag_matrix[*]}")]"
+          echo "tags=$tags_json" >> $GITHUB_OUTPUT
+          echo "no_tags_created=false" >> $GITHUB_OUTPUT
+          echo "Matrix JSON: $tags_json"
+          echo "Found ${#tag_matrix[@]} applications to build"
+
+  # Job to build and push all applications in parallel
+  # Job to handle no tags created scenario
+  no-tags-handler:
+    name: Handle No Tags Created
+    runs-on: ubuntu-latest
+    needs: find-tags
+    if: ${{ needs.find-tags.outputs.no_tags_created == 'true' }}
+    steps:
+      - name: Report no tags created
+        run: |
+          echo "## ℹ️ No Docker Images to Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** No new tags were created by the auto-create-tags workflow" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** Skipping GHCR push - no new images to build" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** Either no VERSION files changed or all tags already exist" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Update VERSION files in application directories to create new tags" >> $GITHUB_STEP_SUMMARY
+          echo "- Ensure changelog workflow completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚫 **No release will be created** - this prevents unnecessary releases when no changes are made." >> $GITHUB_STEP_SUMMARY
+
+  build-and-push:
+    name: Build ${{ matrix.application }}
+    runs-on: ubuntu-latest
+    needs: find-tags
+    if: ${{ needs.find-tags.outputs.tags != '[]' && needs.find-tags.outputs.tags != '' && needs.find-tags.outputs.no_tags_created != 'true' }}
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.find-tags.outputs.tags) }}
+      fail-fast: false  # Continue building other apps even if one fails
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-${{ matrix.application }}
+          tags: |
+            type=raw,value=${{ matrix.version }}
+            type=raw,value=latest
+
+      - name: Read application version
+        id: version
+        run: |
+          application_version=""
+          if [ -f "application/${{ matrix.application }}/VERSION" ]; then
+            application_version=$(cat application/${{ matrix.application }}/VERSION)
+            echo "Application version from VERSION file: $application_version"
+          else
+            application_version="${{ matrix.version }}"
+            echo "Using extracted version: $application_version"
+          fi
+          echo "version=$application_version" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./application/${{ matrix.application }}
+          file: ./application/${{ matrix.application }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NAME=${{ github.event.repository.name }}
+            VERSION=${{ steps.version.outputs.version }}
+            MODE=prod
+
+      - name: Print summary
+        run: |
+          echo "## GitHub Container Registry Push Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application:** ${{ matrix.application }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** GitHub Container Registry (ghcr.io)" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** Workflow Run" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ matrix.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Args:**" >> $GITHUB_STEP_SUMMARY
+          echo "- NAME: ${{ github.event.repository.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- VERSION: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- MODE: prod" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags pushed:**" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Pull the image:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-${{ matrix.application }}:${{ matrix.version }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # Job to report completion after all builds finish
+  report-completion:
+    name: Report Workflow Completion
+    runs-on: ubuntu-latest
+    needs: [find-tags, build-and-push]
+    if: ${{ always() && needs.find-tags.outputs.no_tags_created != 'true' }}  # Only run if tags were created
+    steps:
+      - name: Determine overall workflow status
+        id: status
+        run: |
+          find_tags_result="${{ needs.find-tags.result }}"
+          build_push_result="${{ needs.build-and-push.result }}"
+          
+          echo "Find tags result: $find_tags_result"
+          echo "Build and push result: $build_push_result"
+          
+          # Determine overall status
+          if [ "$find_tags_result" = "success" ] && [ "$build_push_result" = "success" ]; then
+            overall_status="success"
+            echo "✅ All GHCR operations completed successfully"
+          else
+            overall_status="failure"
+            echo "❌ GHCR workflow had failures"
+            echo "   - Find tags: $find_tags_result"
+            echo "   - Build and push: $build_push_result"
+          fi
+          
+          echo "overall_status=$overall_status" >> $GITHUB_OUTPUT
+          echo "Final workflow status: $overall_status"
+
+      - name: Print completion summary
+        run: |
+          overall_status="${{ steps.status.outputs.overall_status }}"
+          echo "🎯 GHCR Workflow Completed!"
+          echo "Overall Status: $overall_status"
+          echo "Registry: ghcr"
+          echo "Workflow: ghcr-push"
+          echo ""
+          echo "📊 Job Results:"
+          echo "   - Find tags: ${{ needs.find-tags.result }}"
+          echo "   - Build and push: ${{ needs.build-and-push.result }}"
+          echo ""
+          echo "ℹ️ The Release Coordinator is running in parallel and will handle coordination"

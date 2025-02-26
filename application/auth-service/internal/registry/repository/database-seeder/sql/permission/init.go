@@ -1,0 +1,17 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+package permission
+
+import (
+	"auth-service/internal/pkg/constant"
+
+	internal_domain_repository_databaseseeder_sql_permission "auth-service/internal/domain/repository/database-seeder/sql/permission"
+	internal_registry_repository_database_sql_permission "auth-service/internal/registry/repository/database/sql/permission"
+)
+
+func PermissionDatabaseSeederSQLRepository(dialect constant.DialectDatabaseSQL) internal_domain_repository_databaseseeder_sql_permission.IPermissionDatabaseSeederSQLRepository {
+	iPermissionDatabaseSQLRepository := internal_registry_repository_database_sql_permission.PermissionDatabaseSQLRepository(dialect)
+	iPermissionDatabaseSeederSQLRepository := internal_domain_repository_databaseseeder_sql_permission.InitPermissionDatabaseSeederSQLRepository(iPermissionDatabaseSQLRepository)
+	return iPermissionDatabaseSeederSQLRepository
+}

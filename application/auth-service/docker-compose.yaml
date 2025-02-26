@@ -1,0 +1,33 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  auth_service:
+    container_name: auth_service_${ENV}
+    tty: true
+    build:
+      dockerfile: Dockerfile
+      context: .
+      args:
+        MODE: development
+    image: ${SLUG}/auth_service:${VERSION}
+    environment:
+      - ENV=${ENV}
+    volumes:
+      - ./env:/env
+      - ./certs:/certs
+    ports:
+      - 4041:${SERVER_PORT:-4040}
+    restart: on-failure
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "nc", "-zv", "localhost", "${SERVER_PORT:-4040}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}

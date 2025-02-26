@@ -1,0 +1,21 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+package rolepermission
+
+import (
+	"auth-service/internal/pkg/constant"
+
+	internal_domain_repository_databaseseeder_sql_rolepermission "auth-service/internal/domain/repository/database-seeder/sql/role-permission"
+	internal_registry_repository_database_sql_permission "auth-service/internal/registry/repository/database/sql/permission"
+	internal_registry_repository_database_sql_role "auth-service/internal/registry/repository/database/sql/role"
+	internal_registry_repository_database_sql_rolepermission "auth-service/internal/registry/repository/database/sql/role-permission"
+)
+
+func RolePermissionDatabaseSeederSQLRepository(dialect constant.DialectDatabaseSQL) internal_domain_repository_databaseseeder_sql_rolepermission.IRolePermissionDatabaseSeederSQLRepository {
+	iRoleDatabaseSQLRepository := internal_registry_repository_database_sql_role.RoleDatabaseSQLRepository(dialect)
+	iPermissionDatabaseSQLRepository := internal_registry_repository_database_sql_permission.PermissionDatabaseSQLRepository(dialect)
+	iRolePermissionDatabaseSQLRepository := internal_registry_repository_database_sql_rolepermission.RolePermissionDatabaseSQLRepository(dialect)
+	iRolePermissionDatabaseSeederSQLRepository := internal_domain_repository_databaseseeder_sql_rolepermission.InitRolePermissionDatabaseSeederSQLRepository(iRoleDatabaseSQLRepository, iPermissionDatabaseSQLRepository, iRolePermissionDatabaseSQLRepository)
+	return iRolePermissionDatabaseSeederSQLRepository
+}

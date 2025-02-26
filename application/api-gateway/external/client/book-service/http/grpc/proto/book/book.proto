@@ -1,0 +1,96 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+syntax = "proto3";
+
+package book;
+
+option go_package = "api-gateway/external/client/book-service/http/grpc/proto/book;book";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message Meta {
+    int32 CurrentPage = 1 [json_name = "current_page"];
+    int32 TotalDataPerPage = 2 [json_name = "total_data_per_page"];
+    int32 TotalData = 3 [json_name = "total_data"];
+    int32 TotalPage = 4 [json_name = "total_page"];
+}
+
+message Book {
+    uint32 ID = 1 [json_name = "id"];
+    string XID = 2 [json_name = "xid"];
+    string Title = 3 [json_name = "title"];
+    optional string ISBN = 4 [json_name = "isbn"];
+    optional int32 PublicationYear = 5 [json_name = "publication_year"];
+    int32 Stock = 6 [json_name = "stock"];
+    int32 BorrowStock = 7 [json_name = "borrow_stock"];
+    google.protobuf.Timestamp CreatedAt = 8 [json_name = "created_at"];
+    google.protobuf.Timestamp UpdatedAt = 9 [json_name = "updated_at"];
+    uint32 AuthorID = 10 [json_name = "author_id"];
+    uint32 CategoryID = 11 [json_name = "category_id"];
+}
+
+service BookHandler {
+    rpc CreateBook (CreateBookRequest) returns (google.protobuf.Empty);
+    rpc GetBooks (GetBooksRequest) returns (GetBooksResponse);
+    rpc GetBook (GetBookRequest) returns (GetBookResponse);
+    rpc UpdateBook (UpdateBookRequest) returns (google.protobuf.Empty);
+    rpc DeleteBook (DeleteBookRequest) returns (google.protobuf.Empty);
+
+    rpc BorrowBook (BorrowBookRequest) returns (google.protobuf.Empty);
+    rpc ReturnBook (ReturnBookRequest) returns (google.protobuf.Empty);
+}
+
+message CreateBookRequest {
+    string Title = 1 [json_name = "title"];
+    optional string ISBN = 2 [json_name = "isbn"];
+    optional int32 PublicationYear = 3 [json_name = "publication_year"];
+    int32 Stock = 4 [json_name = "stock"];
+    uint32 AuthorID = 5 [json_name = "author_id"];
+    uint32 CategoryID = 6 [json_name = "category_id"];
+}
+
+message GetBooksRequest {
+    optional int32 Page = 1 [json_name = "page"];
+    optional int32 Limit = 2 [json_name = "limit"];
+}
+
+message GetBooksResponse {
+    Meta Meta = 1 [json_name = "meta"];
+    repeated Book Data = 2 [json_name = "data"];
+}
+
+message GetBookRequest {
+    string XID = 1 [json_name = "xid"];
+    optional uint32 AuthorID = 2 [json_name = "author_id"];
+    optional uint32 CategoryID = 3 [json_name = "category_id"];
+}
+
+message GetBookResponse {
+    Book Data = 1 [json_name = "data"];
+}
+
+message UpdateBookRequest {
+    string XID = 1 [json_name = "xid"];
+    optional string Title = 2 [json_name = "title"];
+    optional string ISBN = 3 [json_name = "isbn"];
+    optional int32 PublicationYear = 4 [json_name = "publication_year"];
+    optional int32 Stock = 5 [json_name = "stock"];
+    optional uint32 AuthorID = 6 [json_name = "author_id"];
+    optional uint32 CategoryID = 7 [json_name = "category_id"];
+}
+
+message DeleteBookRequest {
+    string XID = 1 [json_name = "xid"];
+}
+
+message BorrowBookRequest {
+    uint32 UserID = 1 [json_name = "user_id"];
+    string XID = 2 [json_name = "xid"];
+}
+
+message ReturnBookRequest {
+    uint32 UserID = 1 [json_name = "user_id"];
+    string XID = 2 [json_name = "xid"];
+}

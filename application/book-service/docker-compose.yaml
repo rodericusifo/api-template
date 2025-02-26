@@ -1,0 +1,33 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  book_service:
+    container_name: book_service_${ENV}
+    tty: true
+    build:
+      dockerfile: Dockerfile
+      context: .
+      args:
+        MODE: development
+    image: ${SLUG}/book_service:${VERSION}
+    environment:
+      - ENV=${ENV}
+    volumes:
+      - ./env:/env
+      - ./certs:/certs
+    ports:
+      - 7071:${SERVER_PORT:-7070}
+    restart: on-failure
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "nc", "-zv", "localhost", "${SERVER_PORT:-7070}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}

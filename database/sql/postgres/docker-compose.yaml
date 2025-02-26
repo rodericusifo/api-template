@@ -1,0 +1,75 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  primary_postgres:
+    image: postgres:latest
+    container_name: primary_postgres_${ENV}
+    environment:
+      - POSTGRES_USER=${DATABASE_SQL_POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${DATABASE_SQL_POSTGRES_PASSWORD}
+      - POSTGRES_REPLICATOR_PASSWORD=${DATABASE_SQL_POSTGRES_REPLICATOR_PASSWORD}
+      - PGTZ=${DATABASE_SQL_POSTGRES_TIME_ZONE}
+    user: root
+    ports:
+      - 5433:5432
+    restart: always
+    volumes:
+      - primary_postgres_data:/var/lib/postgresql/data
+      - ./primary/archive:/mnt/server/archive
+      - ./primary/config:/etc/postgresql
+      - ./primary/initdb:/docker-entrypoint-initdb.d
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_SQL_POSTGRES_USERNAME} -h localhost -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  replica_postgres:
+    image: postgres:latest
+    container_name: replica_postgres_${ENV}
+    environment:
+      - POSTGRES_USER=${DATABASE_SQL_POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${DATABASE_SQL_POSTGRES_PASSWORD}
+      - PGTZ=${DATABASE_SQL_POSTGRES_TIME_ZONE}
+    user: postgres
+    ports:
+      - 5434:5432
+    restart: always
+    depends_on:
+      primary_postgres:
+        condition: service_healthy
+    volumes:
+      - replica_postgres_data:/var/lib/postgresql/data
+      - ./replica/config:/etc/postgresql
+      - ./replica/archive:/mnt/server/archive
+    command: >
+      bash -c "
+      export PGPASSWORD='${DATABASE_SQL_POSTGRES_REPLICATOR_PASSWORD}' &&
+      rm -rf /var/lib/postgresql/data/* &&
+      pg_basebackup -h primary_postgres -p 5432 -U replicator -D /var/lib/postgresql/data -Fp -Xs -R &&
+      chmod 0700 /var/lib/postgresql/data &&
+      exec postgres -c config_file=/etc/postgresql/postgresql.conf"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_SQL_POSTGRES_USERNAME} -h localhost -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  primary_postgres_data:
+    external: true
+    name: ${SLUG}_primary_postgres_data_${ENV}
+  replica_postgres_data:
+    external: true
+    name: ${SLUG}_replica_postgres_data_${ENV}
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}

@@ -1,0 +1,7 @@
+# Confidential files
+*.env
+*.cnf
+*.crt
+*.csr
+*.key
+*.srl

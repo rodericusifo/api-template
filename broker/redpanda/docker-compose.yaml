@@ -1,0 +1,313 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  ##################
+  # Redpanda Brokers #
+  ##################
+  redpanda-0:
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      # Address the broker advertises to clients that connect to the Kafka API.
+      # Use the internal addresses to connect to the Redpanda brokers
+      # from inside the same Docker network.
+      # Use the external addresses to connect to the Redpanda brokers
+      # from outside the Docker network.
+      - --advertise-kafka-addr internal://redpanda-0:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      # Address the broker advertises to clients that connect to the HTTP Proxy.
+      - --advertise-pandaproxy-addr internal://redpanda-0:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      # Redpanda brokers use the RPC API to communicate with each other internally.
+      - --rpc-addr redpanda-0:33145
+      - --advertise-rpc-addr redpanda-0:33145
+      # Mode dev-container uses well-known configuration properties for development in containers.
+      - --mode dev-container
+      # Tells Seastar (the framework Redpanda uses under the hood) to use 1 core on the system.
+      - --smp 1
+      - --default-log-level=info
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.6
+    container_name: redpanda-0_${ENV}
+    # Sets the username and password of the bootstrap SCRAM
+    # See https://docs.redpanda.com/current/deploy/deployment-option/self-hosted/manual/production/production-deployment/#bootstrap-a-user-account
+    environment:
+      - RP_BOOTSTRAP_USER=${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}:${BROKER_REDPANDA_BOOTSTRAP_USER_PASSWORD}
+    volumes:
+      - redpanda-0_data:/var/lib/redpanda/data
+    configs:
+      - source: redpanda_bootstrap_config
+        target: /etc/redpanda/.bootstrap.yaml
+    networks:
+      - backend
+    ports:
+      - 18081:18081
+      - 18082:18082
+      - 19092:19092
+      - 19644:9644
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info", "-X", "user=${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}", "-X", "pass=${BROKER_REDPANDA_BOOTSTRAP_USER_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      - minio
+  redpanda-1:
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:29092
+      - --advertise-kafka-addr internal://redpanda-1:9092,external://localhost:29092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:28082
+      - --advertise-pandaproxy-addr internal://redpanda-1:8082,external://localhost:28082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:28081
+      - --rpc-addr redpanda-1:33145
+      - --advertise-rpc-addr redpanda-1:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+      - --seeds redpanda-0:33145
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.6
+    container_name: redpanda-1_${ENV}
+    environment:
+      - RP_BOOTSTRAP_USER=${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}:${BROKER_REDPANDA_BOOTSTRAP_USER_PASSWORD}
+    volumes:
+      - redpanda-1_data:/var/lib/redpanda/data
+    configs:
+      - source: redpanda_bootstrap_config
+        target: /etc/redpanda/.bootstrap.yaml
+    networks:
+      - backend
+    ports:
+      - 28081:28081
+      - 28082:28082
+      - 29092:29092
+      - 29644:9644
+    depends_on:
+      - redpanda-0
+      - minio
+  redpanda-2:
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:39092
+      - --advertise-kafka-addr internal://redpanda-2:9092,external://localhost:39092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:38082
+      - --advertise-pandaproxy-addr internal://redpanda-2:8082,external://localhost:38082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:38081
+      - --rpc-addr redpanda-2:33145
+      - --advertise-rpc-addr redpanda-2:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+      - --seeds redpanda-0:33145
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.6
+    container_name: redpanda-2_${ENV}
+    environment:
+      - RP_BOOTSTRAP_USER=${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}:${BROKER_REDPANDA_BOOTSTRAP_USER_PASSWORD}
+    volumes:
+      - redpanda-2_data:/var/lib/redpanda/data
+    configs:
+      - source: redpanda_bootstrap_config
+        target: /etc/redpanda/.bootstrap.yaml
+    networks:
+      - backend
+    ports:
+      - 38081:38081
+      - 38082:38082
+      - 39092:39092
+      - 39644:9644
+    depends_on:
+      - redpanda-0
+      - minio
+  ####################
+  # Redpanda Console #
+  ####################
+  redpanda-console:
+    container_name: redpanda-console_${ENV}
+    image: docker.redpanda.com/redpandadata/console:v2.8.4
+    networks:
+      - backend
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml && echo "$$CONSOLE_ROLEBINDINGS_CONFIG_FILE" > /tmp/role-bindings.yml && /app/console'
+    volumes:
+      - ./config:/tmp/config/
+    environment:
+      REDPANDA_CONSOLE_LICENSE: community
+      CONFIG_FILEPATH: ${CONFIG_FILEPATH:-/tmp/config.yml}
+      CONSOLE_CONFIG_FILE: |
+        # Configure a connection to the Redpanda cluster
+        # See https://docs.redpanda.com/current/console/config/connect-to-redpanda/
+        kafka:
+          brokers: ["redpanda-0:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://redpanda-0:8081","http://redpanda-1:8081","http://redpanda-2:8081"]
+          sasl:
+            enabled: true
+            username: ${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}
+            password: ${BROKER_REDPANDA_BOOTSTRAP_USER_PASSWORD}
+            mechanism: SCRAM-SHA-256
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda-0:9644","http://redpanda-1:9644","http://redpanda-2:9644"]
+            username: ${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}
+            password: ${BROKER_REDPANDA_BOOTSTRAP_USER_PASSWORD}
+        console:
+          # Configures Redpanda Console to fetch topic documentation from GitHub and display it in the UI.
+          # See https://docs.redpanda.com/current/console/config/topic-documentation/
+          topicDocumentation:
+            enabled: true
+            git:
+              enabled: true
+              repository:
+                url: https://github.com/redpanda-data/docs
+                branch: main
+                baseDirectory: tests/docker-compose
+        login:
+          enabled: true
+          jwtSecret: ${BROKER_REDPANDA_CONSOLE_JWT_SECRET}
+          useSecureCookies: false
+          # Enable plain login authentication (enterprise feature)
+          # See https://docs.redpanda.com/current/console/config/security/plain/
+          plain:
+            enabled: true
+            credentials:
+            - username: ${BROKER_REDPANDA_CONSOLE_ADMIN_USERNAME}
+              password: ${BROKER_REDPANDA_CONSOLE_ADMIN_PASSWORD}
+        enterprise:
+          # Configures role-based access control to data and features in Redpanda Console.
+          # See https://docs.redpanda.com/current/console/config/security/authorization/
+          rbac:
+            enabled: true
+            roleBindingsFilepath: /tmp/role-bindings.yml
+      CONSOLE_ROLEBINDINGS_CONFIG_FILE: |
+        roleBindings:
+        - metadata:
+            name: Console Admin
+          subjects:
+            - kind: user
+              provider: Plain
+              name: ${BROKER_REDPANDA_CONSOLE_ADMIN_USERNAME}
+          roleName: admin
+    ports:
+      - 8080:8080
+    depends_on:
+      redpanda-0:
+        condition: service_healthy
+  ####################
+  # MinIO for Tiered Storage #
+  # See https://min.io/
+  #
+  # NOTE: MinIO is included in this quickstart for development and evaluation purposes only.
+  # It is not supported for production deployments of Redpanda.
+  #
+  # For production environments, use one of the supported object storage providers:
+  # https://docs.redpanda.com/current/deploy/deployment-option/self-hosted/manual/production/requirements/#object-storage-providers-for-tiered-storage
+  ####################
+  minio:
+    container_name: minio_${ENV}
+    image: minio/minio
+    command: server --console-address ":9001" /data
+    ports:
+      - 9000:9000
+      - 9001:9001
+    environment:
+      MINIO_ROOT_USER: ${BROKER_REDPANDA_CLOUD_STORAGE_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${BROKER_REDPANDA_CLOUD_STORAGE_SECRET_KEY}
+      MINIO_SERVER_URL: "http://minio:9000"
+      MINIO_REGION_NAME: local
+      MINIO_DOMAIN: minio
+    volumes:
+      - minio_data:/data
+    networks:
+      backend:
+        aliases:
+          - redpanda.minio
+  mc:
+    depends_on:
+      - minio
+    image: minio/mc
+    container_name: mc_${ENV}
+    networks:
+      - backend
+    environment:
+      - AWS_ACCESS_KEY_ID=${BROKER_REDPANDA_CLOUD_STORAGE_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${BROKER_REDPANDA_CLOUD_STORAGE_SECRET_KEY}
+      - AWS_REGION=local
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add minio http://minio:9000 ${BROKER_REDPANDA_CLOUD_STORAGE_ACCESS_KEY} ${BROKER_REDPANDA_CLOUD_STORAGE_SECRET_KEY}) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc mb minio/redpanda;
+      /usr/bin/mc policy set public minio/redpanda;
+      tail -f /dev/null
+      "
+
+configs:
+  redpanda_bootstrap_config:
+    content: |
+      # =================================================================
+      # This file defines initial cluster properties for a Redpanda cluster.
+      # Some of these settings are intended for quickstart development and evaluation
+      # and are not suitable for production environments.
+      #
+      # For more information on bootstrap files, see:
+      # https://docs.redpanda.com/current/deploy/deployment-option/self-hosted/manual/production/production-deployment/#configure-a-bootstrap-file
+      # =================================================================
+
+      #
+      # Enable SASL authentication for the Kafka and Admin APIs.
+      # https://docs.redpanda.com/current/reference/properties/cluster-properties/#admin_api_require_auth
+      admin_api_require_auth: true
+      # At least one superuser is required to be able to create other SASL users
+      # https://docs.redpanda.com/current/reference/properties/cluster-properties/#superusers
+      superusers:
+        - ${BROKER_REDPANDA_BOOTSTRAP_USER_USERNAME}
+      # https://docs.redpanda.com/current/reference/properties/cluster-properties/#enable_sasl
+      enable_sasl: true
+      # Allow topics to be created on first access.
+      # https://docs.redpanda.com/current/reference/properties/cluster-properties/#auto_create_topics_enabled
+      auto_create_topics_enabled: true
+      # Enable data transforms.
+      # https://docs.redpanda.com/current/develop/data-transforms/how-transforms-work/
+      data_transforms_enabled: true
+      # Enable audit logging (enterprise feature).
+      # https://docs.redpanda.com/current/manage/audit-logging/
+      audit_enabled: true
+      # Enable Tiered Storage (enterprise feature).
+      # https://docs.redpanda.com/current/manage/tiered-storage/
+      cloud_storage_enabled: true
+      cloud_storage_region: local
+      cloud_storage_access_key: ${BROKER_REDPANDA_CLOUD_STORAGE_ACCESS_KEY}
+      cloud_storage_secret_key: ${BROKER_REDPANDA_CLOUD_STORAGE_SECRET_KEY}
+      cloud_storage_api_endpoint: minio
+      cloud_storage_api_endpoint_port: 9000
+      cloud_storage_disable_tls: true
+      cloud_storage_bucket: redpanda
+      # Forces segments to be uploaded to Tiered Storage faster for the purposes of the quickstart
+      # https://docs.redpanda.com/current/reference/properties/object-storage-properties/#cloud_storage_segment_max_upload_interval_sec
+      cloud_storage_segment_max_upload_interval_sec: 60
+      # Continuous Data Balancing (enterprise feature) continuously monitors your node and rack availability and disk usage. This enables self-healing clusters that dynamically balance partitions, ensuring smooth operations and optimal cluster performance.
+      # https://docs.redpanda.com/current/manage/cluster-maintenance/continuous-data-balancing/
+      partition_autobalancing_mode: continuous
+
+volumes:
+  redpanda-0_data:
+    external: true
+    name: ${SLUG}_redpanda-0_data_${ENV}
+  redpanda-1_data:
+    external: true
+    name: ${SLUG}_redpanda-1_data_${ENV}
+  redpanda-2_data:
+    external: true
+    name: ${SLUG}_redpanda-2_data_${ENV}
+  minio_data:
+    external: true
+    name: ${SLUG}_minio_data_${ENV}
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}

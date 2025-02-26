@@ -1,0 +1,35 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  api_gateway:
+    container_name: api_gateway_${ENV}
+    tty: true
+    build:
+      dockerfile: Dockerfile
+      context: .
+      args:
+        VERSION: ${VERSION}
+        NAME: ${NAME}
+        MODE: development
+    image: ${SLUG}/api_gateway:${VERSION}
+    environment:
+      - ENV=${ENV}
+    volumes:
+      - ./env:/env
+      - ./certs:/certs
+    ports:
+      - 8081:${SERVER_PORT:-8080}
+    restart: on-failure
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "nc", "-zv", "localhost", "${SERVER_PORT:-8080}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}

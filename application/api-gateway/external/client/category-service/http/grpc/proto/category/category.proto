@@ -1,0 +1,69 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+syntax = "proto3";
+
+package category;
+
+option go_package = "api-gateway/external/client/category-service/http/grpc/proto/category;category";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message Meta {
+    int32 CurrentPage = 1 [json_name = "current_page"];
+    int32 TotalDataPerPage = 2 [json_name = "total_data_per_page"];
+    int32 TotalData = 3 [json_name = "total_data"];
+    int32 TotalPage = 4 [json_name = "total_page"];
+}
+
+message Category {
+    uint32 ID = 1 [json_name = "id"];
+    string XID = 2 [json_name = "xid"];
+    string Name = 3 [json_name = "name"];
+    optional string Description = 4 [json_name = "description"];
+    google.protobuf.Timestamp CreatedAt = 5 [json_name = "created_at"];
+    google.protobuf.Timestamp UpdatedAt = 6 [json_name = "updated_at"];
+}
+
+service CategoryHandler {
+    rpc CreateCategory (CreateCategoryRequest) returns (google.protobuf.Empty);
+    rpc GetCategories (GetCategoriesRequest) returns (GetCategoriesResponse);
+    rpc GetCategory (GetCategoryRequest) returns (GetCategoryResponse);
+    rpc UpdateCategory (UpdateCategoryRequest) returns (google.protobuf.Empty);
+    rpc DeleteCategory (DeleteCategoryRequest) returns (google.protobuf.Empty);
+}
+
+message CreateCategoryRequest {
+    string Name = 1 [json_name = "name"];
+    optional string Description = 2 [json_name = "description"];
+}
+
+message GetCategoriesRequest {
+    optional int32 Page = 1 [json_name = "page"];
+    optional int32 Limit = 2 [json_name = "limit"];
+}
+
+message GetCategoriesResponse {
+    Meta Meta = 1 [json_name = "meta"];
+    repeated Category Data = 2 [json_name = "data"];
+}
+
+message GetCategoryRequest {
+    string XID = 1 [json_name = "xid"];
+    optional uint32 ID = 2 [json_name = "id"];
+}
+
+message GetCategoryResponse {
+    Category Data = 1 [json_name = "data"];
+}
+
+message UpdateCategoryRequest {
+    string XID = 1 [json_name = "xid"];
+    optional string Name = 2 [json_name = "name"];
+    optional string Description = 3 [json_name = "description"];
+}
+
+message DeleteCategoryRequest {
+    string XID = 1 [json_name = "xid"];
+}

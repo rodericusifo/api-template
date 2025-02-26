@@ -1,0 +1,638 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+name: Pull Request Validations
+
+on:
+  pull_request:
+    branches:
+      - prod-v1
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  check-application-changes:
+    name: Check Application Changes
+    runs-on: ubuntu-latest
+    outputs:
+      has-application-changes: ${{ steps.check-changes.outputs.has-application-changes }}
+      modified-applications: ${{ steps.check-changes.outputs.modified-applications }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Fetch base branch
+      run: |
+        git fetch origin prod-v1:prod-v1
+    
+    - name: Check application changes
+      id: check-changes
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # Colors for output
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        NC='\033[0m'
+        
+        print_error() {
+            echo -e "${RED}ERROR: $1${NC}" >&2
+        }
+        
+        print_success() {
+            echo -e "${GREEN}SUCCESS: $1${NC}"
+        }
+        
+        print_warning() {
+            echo -e "${YELLOW}WARNING: $1${NC}"
+        }
+        
+        print_info() {
+            echo -e "${BLUE}INFO: $1${NC}"
+        }
+        
+        print_info "Checking for application changes..."
+        
+        # Get commits in this PR
+        commits_in_pr=$(git rev-list prod-v1..HEAD)
+        
+        if [ -z "$commits_in_pr" ]; then
+            print_info "No new commits in PR."
+            echo "has-application-changes=false" >> $GITHUB_OUTPUT
+            exit 0
+        fi
+        
+        # Find modified applications (excluding certain files)
+        applications=()
+        
+        while IFS= read -r commit; do
+            files_changed=$(git diff-tree --no-commit-id --name-only -r "$commit")
+            while IFS= read -r file; do
+                if [[ $file == application/* ]]; then
+                    application_name=$(echo $file | cut -d'/' -f2)
+                    
+                    # Extract the file name from the path
+                    filename=$(basename "$file")
+                    
+                    # Skip files that shouldn't trigger changelog generation
+                    if [[ "$filename" == "CHANGELOG.md" ]] || \
+                       [[ "$filename" == "Makefile" ]] || \
+                       [[ "$filename" == "docker-compose.yaml" ]]; then
+                        print_info "Skipping file (excluded from application change detection): $file"
+                        continue
+                    fi
+                    
+                    if [[ ! " ${applications[@]} " =~ " ${application_name} " ]]; then
+                        applications+=("$application_name")
+                    fi
+                fi
+            done <<< "$files_changed"
+        done <<< "$commits_in_pr"
+        
+        if [ ${#applications[@]} -eq 0 ]; then
+            print_info "No applications modified."
+            echo "has-application-changes=false" >> $GITHUB_OUTPUT
+            exit 0
+        fi
+        
+        print_info "Applications with changes: ${applications[*]}"
+        echo "has-application-changes=true" >> $GITHUB_OUTPUT
+        echo "modified-applications=$(IFS=,; echo "${applications[*]}")" >> $GITHUB_OUTPUT
+        
+        # Create GitHub Actions summary
+        echo "## 📋 Application Changes Detected" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Applications with changes:** ${applications[*]}" >> $GITHUB_STEP_SUMMARY
+        echo "**Total applications:** ${#applications[@]}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "These applications will be validated for proper version updates." >> $GITHUB_STEP_SUMMARY
+        
+        print_success "Found ${#applications[@]} applications with changes"
+
+  validate-api-mk:
+    name: Validate api.mk Applications List
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    
+    - name: Validate applications in api.mk
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # Colors for output
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        NC='\033[0m'
+        
+        print_error() {
+            echo -e "${RED}ERROR: $1${NC}" >&2
+        }
+        
+        print_success() {
+            echo -e "${GREEN}SUCCESS: $1${NC}"
+        }
+        
+        print_warning() {
+            echo -e "${YELLOW}WARNING: $1${NC}"
+        }
+        
+        print_info() {
+            echo -e "${BLUE}INFO: $1${NC}"
+        }
+        
+        print_info "Validating that all applications are listed in api.mk..."
+        
+        # Check if api.mk exists
+        if [ ! -f "api.mk" ]; then
+            print_error "api.mk file not found in repository root"
+            exit 1
+        fi
+        
+        # Extract applications from api.mk
+        if ! grep -q "^APPLICATIONS :=" api.mk; then
+            print_error "APPLICATIONS variable not found in api.mk"
+            exit 1
+        fi
+        
+        api_mk_applications=$(grep "^APPLICATIONS :=" api.mk | sed 's/APPLICATIONS := //' | tr ' ' '\n' | sort)
+        
+        if [ -z "$api_mk_applications" ]; then
+            print_error "No applications found in api.mk APPLICATIONS variable"
+            exit 1
+        fi
+        
+        print_info "Applications listed in api.mk:"
+        echo "$api_mk_applications" | while read app; do
+            if [ -n "$app" ]; then
+                print_info "  - $app"
+            fi
+        done
+        
+        # Get actual applications from filesystem (excluding non-application directories)
+        filesystem_applications=""
+        for application_dir in application/*/; do
+            if [ -d "$application_dir" ]; then
+                application_name=$(basename "$application_dir")
+                # Skip non-application directories/files
+                if [[ "$application_name" != "Makefile" ]] && [[ "$application_name" != "gen-certs.sh" ]]; then
+                    # Verify it's actually an application by checking for VERSION file
+                    if [ -f "$application_dir/VERSION" ]; then
+                        if [ -n "$filesystem_applications" ]; then
+                            filesystem_applications="${filesystem_applications}"$'\n'"$application_name"
+                        else
+                            filesystem_applications="$application_name"
+                        fi
+                    else
+                        print_warning "Directory $application_name found but no VERSION file - might not be an application"
+                    fi
+                fi
+            fi
+        done
+        
+        if [ -z "$filesystem_applications" ]; then
+            print_warning "No applications found in application/ directory"
+            exit 0
+        fi
+        
+        filesystem_applications=$(echo "$filesystem_applications" | sort)
+        
+        print_info "Applications found in filesystem:"
+        echo "$filesystem_applications" | while read app; do
+            if [ -n "$app" ]; then
+                print_info "  - $app"
+            fi
+        done
+        
+        # Compare the two lists
+        missing_in_api_mk=()
+        extra_in_api_mk=()
+        
+        # Check for applications in filesystem but not in api.mk
+        while IFS= read -r app; do
+            if [ -n "$app" ] && ! echo "$api_mk_applications" | grep -q "^$app$"; then
+                missing_in_api_mk+=("$app")
+            fi
+        done <<< "$filesystem_applications"
+        
+        # Check for applications in api.mk but not in filesystem
+        while IFS= read -r app; do
+            if [ -n "$app" ] && ! echo "$filesystem_applications" | grep -q "^$app$"; then
+                extra_in_api_mk+=("$app")
+            fi
+        done <<< "$api_mk_applications"
+        
+        # Report results
+        validation_failed=false
+        
+        if [ ${#missing_in_api_mk[@]} -gt 0 ]; then
+            print_error "Applications found in filesystem but missing from api.mk:"
+            for app in "${missing_in_api_mk[@]}"; do
+                print_error "  - $app"
+            done
+            validation_failed=true
+        fi
+        
+        if [ ${#extra_in_api_mk[@]} -gt 0 ]; then
+            print_error "Applications listed in api.mk but not found in filesystem:"
+            for app in "${extra_in_api_mk[@]}"; do
+                print_error "  - $app"
+            done
+            validation_failed=true
+        fi
+        
+        # Create GitHub Actions summary
+        echo "## 📋 api.mk Applications Validation" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$validation_failed" = true ]; then
+            echo "### ❌ Validation Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ ${#missing_in_api_mk[@]} -gt 0 ]; then
+                echo "**Missing from api.mk:** ${missing_in_api_mk[*]}" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            if [ ${#extra_in_api_mk[@]} -gt 0 ]; then
+                echo "**Extra in api.mk:** ${extra_in_api_mk[*]}" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Rule:** All applications in the \`application/\` directory must be listed in the \`APPLICATIONS\` variable in \`api.mk\`." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**To fix this issue:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Update the \`APPLICATIONS\` variable in \`api.mk\`" >> $GITHUB_STEP_SUMMARY
+            echo "2. Add missing applications or remove extra ones" >> $GITHUB_STEP_SUMMARY
+            echo "3. Ensure the list matches exactly with the \`application/\` directory contents" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**This policy ensures:**" >> $GITHUB_STEP_SUMMARY
+            echo "• Consistency between filesystem and build configuration" >> $GITHUB_STEP_SUMMARY
+            echo "• All applications are included in build processes" >> $GITHUB_STEP_SUMMARY
+            echo "• Proper automation of CI/CD workflows" >> $GITHUB_STEP_SUMMARY
+        else
+            echo "### ✅ Validation Passed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All applications in the filesystem are properly listed in api.mk" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Applications verified:** $(echo "$filesystem_applications" | wc -l)" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "$validation_failed" = true ]; then
+            print_error ""
+            print_error "API.MK APPLICATIONS VALIDATION FAILED"
+            print_error ""
+            print_error "The APPLICATIONS list in api.mk does not match the applications in the filesystem."
+            print_error ""
+            print_error "Current api.mk APPLICATIONS: $(echo "$api_mk_applications" | tr '\n' ' ')"
+            print_error "Expected based on filesystem: $(echo "$filesystem_applications" | tr '\n' ' ')"
+            print_error ""
+            print_error "Please update the APPLICATIONS variable in api.mk to match the filesystem."
+            exit 1
+        else
+            print_success "All applications are properly listed in api.mk"
+        fi
+
+  version-validation:
+    name: Validate VERSION Files
+    runs-on: ubuntu-latest
+    needs: check-application-changes
+    if: needs.check-application-changes.outputs.has-application-changes == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history for version comparison
+    
+    - name: Fetch base branch
+      run: |
+        git fetch origin prod-v1:prod-v1
+    
+    - name: Run Version Validation
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # Colors for output
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        NC='\033[0m' # No Color
+        
+        # Function to print colored output
+        print_error() {
+            echo -e "${RED}ERROR: $1${NC}" >&2
+        }
+        
+        print_success() {
+            echo -e "${GREEN}SUCCESS: $1${NC}"
+        }
+        
+        print_warning() {
+            echo -e "${YELLOW}WARNING: $1${NC}"
+        }
+        
+        print_info() {
+            echo -e "${BLUE}INFO: $1${NC}"
+        }
+        
+        # Function to parse version
+        parse_version() {
+            local version=$1
+            echo $version | sed -E 's/([0-9]+)\.([0-9]+)\.([0-9]+)/\1 \2 \3/'
+        }
+        
+        # Function to compare versions
+        version_greater() {
+            local v1=($1)
+            local v2=($2)
+            
+            for i in {0..2}; do
+                if [ ${v1[$i]} -gt ${v2[$i]} ]; then
+                    return 0
+                elif [ ${v1[$i]} -lt ${v2[$i]} ]; then
+                    return 1
+                fi
+            done
+            return 1
+        }
+        
+        # Function to validate version increment
+        validate_version_increment() {
+            local old_version=$1
+            local new_version=$2
+            
+            local old_parts=($(parse_version $old_version))
+            local new_parts=($(parse_version $new_version))
+            
+            local major_diff=$((new_parts[0] - old_parts[0]))
+            local minor_diff=$((new_parts[1] - old_parts[1]))
+            local patch_diff=$((new_parts[2] - old_parts[2]))
+            
+            # Check if version is higher
+            if ! version_greater "${new_parts[*]}" "${old_parts[*]}"; then
+                print_error "New version $new_version must be higher than old version $old_version"
+                return 1
+            fi
+            
+            # Major version updates are not allowed, except from 0 to 1
+            if [ $major_diff -ne 0 ]; then
+                # Allow major version update from 0.x.x to 1.x.x (pre-release to stable)
+                if [ ${old_parts[0]} -eq 0 ] && [ ${new_parts[0]} -eq 1 ]; then
+                    print_info "Allowing major version update from 0.x.x to 1.x.x (pre-release to stable)"
+                    # When updating from 0.x.x to 1.x.x, minor and patch should be reset to 0
+                    if [ ${new_parts[1]} -ne 0 ] || [ ${new_parts[2]} -ne 0 ]; then
+                        print_error "When updating major version from 0 to 1, minor and patch versions should be reset to 0"
+                        print_error "Expected: 1.0.0, Got: $new_version"
+                        return 1
+                    fi
+                else
+                    print_error "Major version updates are not allowed (except from 0.x.x to 1.0.0)"
+                    print_error "Current major version: ${old_parts[0]}, New major version: ${new_parts[0]}"
+                    return 1
+                fi
+            fi
+            
+            # Minor version diff cannot be negative values, decimal values, more than 1
+            if [ $minor_diff -lt 0 ]; then
+                print_error "Minor version diff cannot be negative values"
+                return 1
+            fi
+            
+            if [ $minor_diff -gt 1 ] || [ $patch_diff -gt 1 ]; then
+                print_error "Minor version diff and patch version diff cannot be more than 1"
+                return 1
+            fi
+            
+            # When minor version updated, the patch version should be reset to 0
+            if [ $minor_diff -gt 0 ] && [ ${new_parts[2]} -ne 0 ]; then
+                print_error "When minor version updated, the patch version should be reset to 0"
+                return 1
+            fi
+            
+            return 0
+        }
+        
+        print_info "Running version validation for PR to prod-v1..."
+        
+        # Get list of commits in this PR
+        commits_in_pr=$(git rev-list prod-v1..HEAD)
+        
+        if [ -z "$commits_in_pr" ]; then
+            print_info "No new commits in PR."
+            exit 0
+        fi
+        
+        print_info "Found commits in PR: $(echo "$commits_in_pr" | wc -l) commits"
+        
+        # Check for application changes in the commits in PR
+        applications=()
+        
+        # Collect all applications that have changes (excluding certain files)
+        while IFS= read -r commit; do
+            files_changed=$(git diff-tree --no-commit-id --name-only -r "$commit")
+            while IFS= read -r file; do
+                if [[ $file == application/* ]]; then
+                    application_name=$(echo $file | cut -d'/' -f2)
+                    
+                    # Extract the file name from the path
+                    filename=$(basename "$file")
+                    
+                    # Skip files that shouldn't trigger validation
+                    if [[ "$filename" == "CHANGELOG.md" ]] || \
+                       [[ "$filename" == "Makefile" ]] || \
+                       [[ "$filename" == "docker-compose.yaml" ]]; then
+                        print_info "Skipping file (excluded from validation trigger): $file"
+                        continue
+                    fi
+                    
+                    if [[ ! " ${applications[@]} " =~ " ${application_name} " ]]; then
+                        applications+=("$application_name")
+                    fi
+                fi
+            done <<< "$files_changed"
+        done <<< "$commits_in_pr"
+        
+        if [ ${#applications[@]} -eq 0 ]; then
+            print_info "No applications modified. Skipping validation."
+            exit 0
+        fi
+        
+        print_info "Applications with changes: ${applications[*]}"
+        
+        # Check for version-only updates without application modifications
+        print_info "=== VERSION-ONLY UPDATE PREVENTION ==="
+        version_only_updates=()
+        
+        # Get all VERSION files that were modified in this PR
+        modified_version_files=$(git diff --name-only prod-v1..HEAD | grep "^application/.*/VERSION$" || true)
+        
+        if [ -n "$modified_version_files" ]; then
+            while IFS= read -r version_file; do
+                if [ -n "$version_file" ]; then
+                    application_name=$(echo "$version_file" | cut -d'/' -f2)
+                    
+                    # Check if only VERSION file was modified for this application (no other significant application files)
+                    application_files_modified=$(git diff --name-only prod-v1..HEAD | grep "^application/$application_name/" | grep -v "^application/$application_name/VERSION$" | while IFS= read -r file; do
+                        filename=$(basename "$file")
+                        # Skip excluded files that don't count as significant changes
+                        if [[ "$filename" != "CHANGELOG.md" ]] && \
+                           [[ "$filename" != "Makefile" ]] && \
+                           [[ "$filename" != "docker-compose.yaml" ]]; then
+                            echo "$file"
+                        fi
+                    done)
+                    
+                    if [ -z "$application_files_modified" ]; then
+                        version_only_updates+=("$application_name")
+                        print_error "❌ $application_name: Only VERSION file was modified, no actual application changes detected"
+                    else
+                        print_success "✅ $application_name: VERSION file modified along with actual application changes"
+                    fi
+                fi
+            done <<< "$modified_version_files"
+        fi
+        
+        # If there are version-only updates, fail the validation
+        if [ ${#version_only_updates[@]} -gt 0 ]; then
+            print_error ""
+            print_error "VERSION-ONLY UPDATE PREVENTION FAILED"
+            print_error ""
+            print_error "Applications with version-only updates: ${version_only_updates[*]}"
+            print_error ""
+            print_error "Rule: VERSION files should only be updated when there are actual application changes."
+            print_error ""
+            print_error "This policy prevents:"
+            print_error "• Empty version bumps without functionality changes"
+            print_error "• Misleading version increments"
+            print_error "• Confusion in release tracking"
+            print_error ""
+            print_error "To fix this issue:"
+            print_error "1. Either make actual changes to the application code, or"
+            print_error "2. Revert the VERSION file changes if no application changes are needed"
+            
+            # Create summary for version-only updates
+            echo "## ❌ Version-Only Updates Detected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Applications with version-only updates:** ${version_only_updates[*]}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Rule Violation:** VERSION files were updated without corresponding application changes." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Why this is not allowed:**" >> $GITHUB_STEP_SUMMARY
+            echo "• Prevents misleading version increments" >> $GITHUB_STEP_SUMMARY
+            echo "• Ensures versions reflect actual functionality changes" >> $GITHUB_STEP_SUMMARY
+            echo "• Maintains clear release tracking" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**To fix:** Either add actual application changes or revert VERSION file changes." >> $GITHUB_STEP_SUMMARY
+            
+            exit 1
+        fi
+        
+        # Validate all changed applications have updated versions from base branch
+        print_info "=== VERSION UPDATE VALIDATION ==="
+        version_validation_failed=false
+        version_validation_details=""
+        
+        for application in "${applications[@]}"; do
+            version_file="application/$application/VERSION"
+            
+            if [ ! -f "$version_file" ]; then
+                print_warning "VERSION file not found for application $application. Skipping version validation."
+                continue
+            fi
+            
+            current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+            base_version=""
+            
+            # Get version from base branch (prod-v1)
+            if git show prod-v1:"$version_file" &>/dev/null; then
+                base_version=$(git show prod-v1:"$version_file" | tr -d '\n\r' | tr -d ' ')
+            else
+                print_warning "VERSION file for $application not found in base branch (prod-v1). Using 0.0.0 as base."
+                base_version="0.0.0"
+            fi
+            
+            print_info "Application: $application | Base: $base_version | Current: $current_version"
+            
+            # Check if version was updated from base branch
+            if [ "$current_version" = "$base_version" ]; then
+                print_error "VERSION file for application '$application' was not updated from base branch"
+                print_error "  Base branch version: $base_version"
+                print_error "  Current version: $current_version"
+                print_error "  Application has changes but version remains the same!"
+                version_validation_failed=true
+                
+                version_validation_details+="❌ **$application**: Version not updated from base branch\\n"
+                version_validation_details+="   - Base: \`$base_version\` → Current: \`$current_version\`\\n"
+                version_validation_details+="   - Suggested patch: \`$(echo $current_version | awk -F. '{print $1"."$2"."($3+1)}')\`\\n"
+                version_validation_details+="   - Suggested minor: \`$(echo $current_version | awk -F. '{print $1"."($2+1)".0"}')\`\\n\\n"
+            else
+                # Validate version format
+                if ! [[ $current_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    print_error "Invalid version format in $version_file. Expected format: x.y.z"
+                    version_validation_failed=true
+                    version_validation_details+="❌ **$application**: Invalid version format \`$current_version\`\\n"
+                    continue
+                fi
+                
+                # Validate version increment
+                if ! validate_version_increment "$base_version" "$current_version"; then
+                    version_validation_failed=true
+                    version_validation_details+="❌ **$application**: Invalid version increment \`$base_version\` → \`$current_version\`\\n"
+                else
+                    print_success "Version validation passed for $application: $base_version -> $current_version"
+                    version_validation_details+="✅ **$application**: Valid version increment \`$base_version\` → \`$current_version\`\\n"
+                fi
+            fi
+        done
+        
+        # Create GitHub Actions summary
+        echo "## 🔍 Version Validation Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Applications analyzed:** ${applications[*]}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo -e "$version_validation_details" >> $GITHUB_STEP_SUMMARY
+        
+        # If any application failed version validation, exit with error
+        if [ "$version_validation_failed" = true ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ❌ Validation Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Rule:** All modified applications must have their VERSION files updated from the base branch." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**To fix this issue:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Update the VERSION file for each failing application" >> $GITHUB_STEP_SUMMARY
+            echo "2. Follow semantic versioning rules (major.minor.patch)" >> $GITHUB_STEP_SUMMARY
+            echo "3. Commit the version changes and push again" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**This policy ensures:**" >> $GITHUB_STEP_SUMMARY
+            echo "• Proper version tracking from base branch" >> $GITHUB_STEP_SUMMARY
+            echo "• Clear release management" >> $GITHUB_STEP_SUMMARY
+            echo "• Consistent versioning across deployments" >> $GITHUB_STEP_SUMMARY
+            
+            print_error ""
+            print_error "VERSION UPDATE VALIDATION FAILED"
+            exit 1
+        else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ All Validations Passed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All modified applications have properly updated VERSION files following semantic versioning rules." >> $GITHUB_STEP_SUMMARY
+            
+            print_success "Version validation passed: All applications have updated versions from base branch"
+        fi

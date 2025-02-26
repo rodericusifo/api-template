@@ -1,0 +1,52 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+syntax = "proto3";
+
+package user;
+
+option go_package = "auth-service/internal/proto/user;user";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+enum RoleStatus {
+    UNKNOWN = 0;
+    ACTIVE = 1;
+    INACTIVE = 2;
+}
+
+message Role {
+    uint32 ID = 1 [json_name = "id"];
+    string Name = 2 [json_name = "name"];
+    string Slug = 3 [json_name = "slug"];
+    RoleStatus Status = 4 [json_name = "status"];
+}
+
+message User {
+    uint32 ID = 1 [json_name = "id"];
+    string XID = 2 [json_name = "xid"];
+    string Name = 3 [json_name = "name"];
+    string Email = 4 [json_name = "email"];
+    google.protobuf.Timestamp CreatedAt = 5 [json_name = "created_at"];
+    google.protobuf.Timestamp UpdatedAt = 6 [json_name = "updated_at"];
+    Role Role = 7 [json_name = "role"];
+}
+
+service UserHandler {
+    rpc GetUser (GetUserRequest) returns (GetUserResponse);
+    rpc ValidateUserRolePermissions (ValidateUserRolePermissionsRequest) returns (google.protobuf.Empty);
+}
+
+message GetUserRequest {
+    string XID = 1 [json_name = "xid"];
+}
+
+message GetUserResponse {
+    User Data = 1 [json_name = "data"];
+}
+
+message ValidateUserRolePermissionsRequest {
+    uint32 RoleID = 1 [json_name ="role_id"];
+    string Path = 2 [json_name ="path"];
+}

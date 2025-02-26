@@ -1,0 +1,443 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+name: Auto Create or Update Changelogs
+
+on:
+  push:
+    branches:
+      - prod-v1
+    paths:
+      - 'application/**/VERSION'  # Only trigger when VERSION files are changed
+
+# Prevent multiple instances from running simultaneously
+concurrency:
+  group: auto-changelog-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel running jobs, just queue them
+
+permissions:
+  contents: write  # Required to commit changelog changes
+  actions: read    # Required to access workflow information
+
+jobs:
+  create-or-update-changelogs:
+    name: Create or Update Changelogs
+    runs-on: ubuntu-latest
+    # Skip workflow for auto-generated commits to prevent infinite loops
+    if: |
+      !contains(github.event.head_commit.message, '[auto-changelog]') &&
+      !contains(github.event.head_commit.message, 'Auto-update changelog') &&
+      !contains(github.event.head_commit.message, '[skip-changelog]')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history to compare versions
+        token: ${{ secrets.BYPASS_PAT || secrets.GITHUB_TOKEN }}
+    
+    - name: Configure git user
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+    
+    - name: Setup GitHub CLI
+      run: |
+        # GitHub CLI is pre-installed on GitHub runners, just configure it
+        echo "${{ secrets.BYPASS_PAT || secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+    
+    - name: Create changelogs for version changes
+      run: |
+        set -e
+        
+        # Colors for output
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        NC='\033[0m'
+        
+        print_error() { echo -e "${RED}ERROR: $1${NC}" >&2; }
+        print_success() { echo -e "${GREEN}SUCCESS: $1${NC}"; }
+        print_warning() { echo -e "${YELLOW}WARNING: $1${NC}"; }
+        print_info() { echo -e "${BLUE}INFO: $1${NC}"; }
+        
+        print_info "Checking for application changes in pushed commits..."
+        
+        # Skip if this is an auto-generated changelog commit to prevent infinite loops
+        commit_message=$(git log -1 --pretty=format:"%s")
+        if [[ "$commit_message" == *"Auto-update changelog"* ]] || [[ "$commit_message" == *"[auto-changelog]"* ]]; then
+            print_info "Skipping changelog generation for auto-generated commit: $commit_message"
+            exit 0
+        fi
+        
+        # Get list of commits that were just pushed
+        # Use GitHub context to get the exact range of commits pushed
+        if [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            # Normal push: compare with the previous state
+            before_commit="${{ github.event.before }}"
+            after_commit="${{ github.event.after }}"
+            
+            # Check if both commits exist and are valid
+            if git rev-parse --verify "$before_commit" >/dev/null 2>&1 && git rev-parse --verify "$after_commit" >/dev/null 2>&1; then
+                # Try to get the commit range
+                if commits_being_pushed=$(git rev-list "$before_commit..$after_commit" 2>/dev/null); then
+                    print_info "Processing push from $before_commit to $after_commit"
+                else
+                    print_warning "Invalid revision range, falling back to single commit analysis"
+                    commits_being_pushed=$(git rev-list -n 1 "$after_commit")
+                    before_commit=""  # Clear before_commit to indicate fallback mode
+                fi
+            else
+                print_warning "Before or after commit not found, analyzing current HEAD only"
+                commits_being_pushed=$(git rev-list -n 1 HEAD)
+                before_commit=""  # Clear before_commit to indicate fallback mode
+            fi
+        else
+            # First push or force push: get all commits in the current push
+            commits_being_pushed=$(git rev-list HEAD)
+            before_commit=""  # No before commit available
+            print_info "Processing initial or force push (all commits)"
+        fi
+        
+        if [ -z "$commits_being_pushed" ]; then
+            print_info "No new commits to process. No changelogs to create."
+            exit 0
+        fi
+        
+        print_info "Found pushed commits: $(echo "$commits_being_pushed" | wc -l) commits"
+        
+        # Check for application changes in the commits being pushed (same as pre-push logic)
+        applications=()
+        
+        # Collect all applications that have changes (excluding certain files)
+        while IFS= read -r commit; do
+            files_changed=$(git diff-tree --no-commit-id --name-only -r "$commit")
+            while IFS= read -r file; do
+                if [[ $file == application/* ]]; then
+                    application_name=$(echo $file | cut -d'/' -f2)
+                    
+                    # Extract the file name from the path
+                    filename=$(basename "$file")
+                    
+                    # Skip files that shouldn't trigger changelog generation
+                    if [[ "$filename" == "CHANGELOG.md" ]] || \
+                       [[ "$filename" == "Makefile" ]] || \
+                       [[ "$filename" == "docker-compose.yaml" ]]; then
+                        print_info "Skipping file (excluded from changelog trigger): $file"
+                        continue
+                    fi
+                    
+                    # Add application to array if not already present
+                    if [[ ! " ${applications[@]} " =~ " ${application_name} " ]]; then
+                        applications+=("$application_name")
+                        print_info "Found changes in application: $application_name"
+                    fi
+                fi
+            done <<< "$files_changed"
+        done <<< "$commits_being_pushed"
+        
+        # Also check for all applications that need changelogs (new applications without CHANGELOG.md)
+        print_info "Checking for applications that need initial changelogs..."
+        for application_dir in application/*/; do
+            if [ -d "$application_dir" ]; then
+                application_name=$(basename "$application_dir")
+                # Skip non-application directories
+                if [[ "$application_name" == "Makefile" ]] || [[ "$application_name" == "gen-certs.sh" ]]; then
+                    continue
+                fi
+                
+                version_file="$application_dir/VERSION"
+                changelog_file="$application_dir/CHANGELOG.md"
+                
+                # If application has VERSION but no CHANGELOG, it needs a changelog
+                if [ -f "$version_file" ] && [ ! -f "$changelog_file" ]; then
+                    if [[ ! " ${applications[@]} " =~ " ${application_name} " ]]; then
+                        applications+=("$application_name")
+                        print_info "Found application needing initial changelog: $application_name"
+                    fi
+                fi
+            fi
+        done
+        
+        if [ ${#applications[@]} -eq 0 ]; then
+            print_info "No applications modified and no applications need initial changelogs."
+            exit 0
+        fi
+        
+        print_info "Applications with changes: ${applications[*]}"
+        
+        # When merging to prod-v1, always process all applications with changes
+        # The version should have been incremented during the merge process
+        applications_to_process=()
+        
+        for application in "${applications[@]}"; do
+            version_file="application/$application/VERSION"
+            
+            if [ ! -f "$version_file" ]; then
+                print_warning "VERSION file not found for application $application. Skipping changelog generation."
+                continue
+            fi
+            
+            current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+            
+            # Get version from the before commit (what was in prod-v1 before this merge)
+            before_version=""
+            if [ -n "$before_commit" ] && git show "$before_commit":"$version_file" &>/dev/null; then
+                before_version=$(git show "$before_commit":"$version_file" | tr -d '\n\r' | tr -d ' ')
+            else
+                if [ -z "$before_commit" ]; then
+                    print_warning "No before commit available (force push or first push). Using base branch for comparison."
+                    # Try to get version from origin/prod-v1 as fallback
+                    if git show origin/prod-v1:"$version_file" &>/dev/null; then
+                        before_version=$(git show origin/prod-v1:"$version_file" | tr -d '\n\r' | tr -d ' ')
+                    else
+                        before_version="0.0.0"
+                    fi
+                else
+                    print_warning "VERSION file for $application not found in before commit. Treating as new application."
+                    before_version="0.0.0"
+                fi
+            fi
+            
+            print_info "Application: $application | Before: $before_version | Current: $current_version"
+            
+            # Always process applications with changes when merging to prod-v1
+            # The assumption is that versions are always incremented during merge
+            applications_to_process+=("$application")
+            if [ "$current_version" != "$before_version" ]; then
+                print_info "Version changed for $application: $before_version -> $current_version"
+            else
+                print_info "Processing $application (version unchanged but application has code changes)"
+            fi
+        done
+        
+        if [ ${#applications_to_process[@]} -eq 0 ]; then
+            print_info "No applications to process. No changelogs to create."
+            exit 0
+        fi
+        
+        print_info "Applications to process for changelog: ${applications_to_process[*]}"
+        
+        # Create/update changelogs for all applications with changes
+        changelogs_created=()
+        changelogs_updated=()
+        
+        for application in "${applications_to_process[@]}"; do
+            version_file="application/$application/VERSION"
+            changelog_file="application/$application/CHANGELOG.md"
+            
+            current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+            
+            print_info "=== CHANGELOG GENERATION ==="
+            print_info "Processing changelog for $application version $current_version..."
+            
+            # Get previous version from before commit for comparison
+            previous_version=""
+            if [ -n "$before_commit" ] && git show "$before_commit":"$version_file" &>/dev/null; then
+                previous_version=$(git show "$before_commit":"$version_file" | tr -d '\n\r' | tr -d ' ')
+            else
+                # Fallback to base branch or default
+                if git show origin/prod-v1:"$version_file" &>/dev/null; then
+                    previous_version=$(git show origin/prod-v1:"$version_file" | tr -d '\n\r' | tr -d ' ')
+                else
+                    previous_version="0.0.0"
+                fi
+            fi
+            
+            # Get commits that were just pushed for this specific application
+            commits_for_application=""
+            
+            # Use the commits that were pushed in this merge
+            while IFS= read -r commit; do
+                if [ -n "$commit" ]; then
+                    files_in_commit=$(git diff-tree --no-commit-id --name-only -r "$commit")
+                    
+                    # Check if this commit modified this application (excluding certain files)
+                    application_modified=false
+                    while IFS= read -r file; do
+                        if [[ $file == application/$application/* ]]; then
+                            # Extract the file name from the path
+                            filename=$(basename "$file")
+                            
+                            # Skip files that shouldn't count as application changes
+                            if [[ "$filename" == "CHANGELOG.md" ]] || \
+                               [[ "$filename" == "Makefile" ]] || \
+                               [[ "$filename" == "docker-compose.yaml" ]]; then
+                                continue
+                            fi
+                            
+                            application_modified=true
+                            break
+                        fi
+                    done <<< "$files_in_commit"
+                    
+                    if [ "$application_modified" = true ]; then
+                        # Skip auto-generated changelog commits
+                        commit_msg=$(git log --format="%s" -n 1 "$commit")
+                        if [[ ! $commit_msg =~ ^docs\($application\):.*Changelog\ for\ Version ]] && [[ ! $commit_msg == *"Auto-update changelog"* ]]; then
+                            commit_line=$(git log --oneline -n 1 "$commit")
+                            if [ -n "$commits_for_application" ]; then
+                                commits_for_application="${commits_for_application}"$'\n'"$commit_line"
+                            else
+                                commits_for_application="$commit_line"
+                            fi
+                        fi
+                    fi
+                fi
+            done <<< "$commits_being_pushed"
+            
+            # For new applications without CHANGELOG.md, create initial changelog even without specific commits
+            changelog_file="application/$application/CHANGELOG.md"
+            if [ ! -f "$changelog_file" ]; then
+                if [ -z "$commits_for_application" ]; then
+                    # Use the overall push commit for initial changelog
+                    commits_for_application=$(git log --oneline -n 1 HEAD)
+                    print_info "Creating initial changelog for new application $application using latest commit"
+                fi
+            elif [ -z "$commits_for_application" ]; then
+                print_warning "No relevant commits found for existing application $application in this push"
+                continue
+            fi
+            
+            # Generate changelog entry
+            changelog_entry="## [${current_version}] - $(date +%Y-%m-%d' '%H:%M:%S)
+        
+        ### Changes
+        "
+            
+            while IFS= read -r commit_line; do
+                if [ -n "$commit_line" ]; then
+                    commit_hash=$(echo "$commit_line" | cut -d' ' -f1)
+                    commit_msg=$(echo "$commit_line" | cut -d' ' -f2-)
+                    changelog_entry="${changelog_entry}- ${commit_msg} (${commit_hash})
+        "
+                fi
+            done <<< "$commits_for_application"
+            
+            # Determine if this is a new application or existing application
+            # New application: Only VERSION file exists (no CHANGELOG.md)
+            # Existing application: Both VERSION and CHANGELOG.md files exist
+            
+            if [ ! -f "$changelog_file" ]; then
+                # New Application - Create new changelog with initiation info
+                print_info "New application detected (only VERSION file exists) - Creating new changelog for $application"
+                
+                # Create initial changelog structure using echo commands
+                {
+                    echo "# Changelog - $application"
+                    echo ""
+                    echo "All notable changes to the $application will be documented in this file."
+                    echo ""
+                    echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),"
+                    echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)."
+                    echo ""
+                    echo "## [${current_version}] - $(date +%Y-%m-%d' '%H:%M:%S)"
+                    echo ""
+                    echo "### Changes"
+                    
+                    # Add commits from this push
+                    while IFS= read -r commit_line; do
+                        if [ -n "$commit_line" ]; then
+                            commit_hash=$(echo "$commit_line" | cut -d' ' -f1)
+                            commit_msg=$(echo "$commit_line" | cut -d' ' -f2-)
+                            echo "- ${commit_msg} (${commit_hash})"
+                        fi
+                    done <<< "$commits_for_application"
+                    
+                    echo ""
+                } > "$changelog_file"
+                
+                changelogs_created+=("$application")
+                print_success "Created new changelog for $application with application initiation and current changes"
+            else
+                # Existing Application - Update existing changelog
+                print_info "Existing application detected (both VERSION and CHANGELOG.md exist) - Updating changelog for $application"
+                
+                # Create temporary file for merging
+                temp_file=$(mktemp)
+                
+                # Read existing changelog and insert new entry right before first version section
+                awk -v new_entry="$changelog_entry" '
+                /^##/ && !inserted {
+                    print new_entry
+                    print ""
+                    inserted = 1
+                }
+                { print }
+                END {
+                    if (!inserted) {
+                        print ""
+                        print new_entry
+                    }
+                }
+                ' "$changelog_file" > "$temp_file"
+                
+                # Replace original with updated version
+                mv "$temp_file" "$changelog_file"
+                changelogs_updated+=("$application")
+                print_success "Updated existing changelog for $application"
+            fi
+        done
+        
+        # Commit changes if any changelogs were created/updated
+        total_changes=$((${#changelogs_created[@]} + ${#changelogs_updated[@]}))
+        
+        if [ $total_changes -gt 0 ]; then
+            git add application/*/CHANGELOG.md
+            
+            # Create commit message
+            if [ ${#changelogs_created[@]} -gt 0 ] && [ ${#changelogs_updated[@]} -gt 0 ]; then
+                commit_msg="Auto-update changelog: Created ${#changelogs_created[@]}, Updated ${#changelogs_updated[@]} [auto-changelog]"
+            elif [ ${#changelogs_created[@]} -gt 0 ]; then
+                commit_msg="Auto-update changelog: Created ${#changelogs_created[@]} changelog(s) [auto-changelog]"
+            else
+                commit_msg="Auto-update changelog: Updated ${#changelogs_updated[@]} changelog(s) [auto-changelog]"
+            fi
+            
+            git commit -m "$commit_msg"
+            
+            # Push directly to prod-v1 using bypass token
+            git push origin prod-v1
+            
+            print_success "Committed and pushed changelog changes directly to prod-v1 (bypassing protection)"
+        fi
+        
+        # Create summary for GitHub Actions
+        echo "## 📝 Auto Changelog Creation Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ ${#changelogs_created[@]} -gt 0 ]; then
+            echo "### 🆕 New Changelogs Created:" >> $GITHUB_STEP_SUMMARY
+            for application in "${changelogs_created[@]}"; do
+                version=$(cat "application/$application/VERSION" | tr -d '\n\r' | tr -d ' ')
+                echo "- **$application** v$version" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ ${#changelogs_updated[@]} -gt 0 ]; then
+            echo "### 🔄 Changelogs Updated:" >> $GITHUB_STEP_SUMMARY
+            for application in "${changelogs_updated[@]}"; do
+                version=$(cat "application/$application/VERSION" | tr -d '\n\r' | tr -d ' ')
+                echo "- **$application** v$version" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "**Summary:** Created ${#changelogs_created[@]} new changelogs, updated ${#changelogs_updated[@]} existing changelogs" >> $GITHUB_STEP_SUMMARY
+        echo "**Trigger:** Automatic on application changes with version updates pushed to prod-v1" >> $GITHUB_STEP_SUMMARY
+        
+        if [ $total_changes -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ Completed Actions:" >> $GITHUB_STEP_SUMMARY
+            echo "- Changelog changes committed and pushed directly to prod-v1" >> $GITHUB_STEP_SUMMARY
+            echo "- Branch protection rules bypassed using elevated token" >> $GITHUB_STEP_SUMMARY
+            echo "- The auto-create-tags workflow will now run automatically" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ $total_changes -gt 0 ]; then
+            print_success "Successfully processed $total_changes changelog(s)"
+        else
+            print_info "No changelogs needed to be created or updated"
+        fi

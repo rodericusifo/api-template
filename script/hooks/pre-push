@@ -1,0 +1,327 @@
+#!/bin/bash
+
+# Pre-push hook for version validation
+# This hook validates version changes according to semantic versioning rules
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_error() {
+    echo -e "${RED}ERROR: $1${NC}" >&2
+}
+
+print_success() {
+    echo -e "${GREEN}SUCCESS: $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}WARNING: $1${NC}"
+}
+
+print_info() {
+    echo -e "${BLUE}INFO: $1${NC}"
+}
+
+# Function to parse version
+parse_version() {
+    local version=$1
+    echo $version | sed -E 's/([0-9]+)\.([0-9]+)\.([0-9]+)/\1 \2 \3/'
+}
+
+# Function to compare versions
+version_greater() {
+    local v1=($1)
+    local v2=($2)
+    
+    for i in {0..2}; do
+        if [ ${v1[$i]} -gt ${v2[$i]} ]; then
+            return 0
+        elif [ ${v1[$i]} -lt ${v2[$i]} ]; then
+            return 1
+        fi
+    done
+    return 1
+}
+
+# Function to validate version increment
+validate_version_increment() {
+    local old_version=$1
+    local new_version=$2
+    
+    local old_parts=($(parse_version $old_version))
+    local new_parts=($(parse_version $new_version))
+    
+    local major_diff=$((new_parts[0] - old_parts[0]))
+    local minor_diff=$((new_parts[1] - old_parts[1]))
+    local patch_diff=$((new_parts[2] - old_parts[2]))
+    
+    # Check if version is higher
+    if ! version_greater "${new_parts[*]}" "${old_parts[*]}"; then
+        print_error "New version $new_version must be higher than old version $old_version"
+        return 1
+    fi
+    
+    # Major version updates are not allowed, except from 0 to 1
+    if [ $major_diff -ne 0 ]; then
+        # Allow major version update from 0.x.x to 1.x.x (pre-release to stable)
+        if [ ${old_parts[0]} -eq 0 ] && [ ${new_parts[0]} -eq 1 ]; then
+            print_info "Allowing major version update from 0.x.x to 1.x.x (pre-release to stable)"
+            # When updating from 0.x.x to 1.x.x, minor and patch should be reset to 0
+            if [ ${new_parts[1]} -ne 0 ] || [ ${new_parts[2]} -ne 0 ]; then
+                print_error "When updating major version from 0 to 1, minor and patch versions should be reset to 0"
+                print_error "Expected: 1.0.0, Got: $new_version"
+                return 1
+            fi
+        else
+            print_error "Major version updates are not allowed (except from 0.x.x to 1.0.0)"
+            print_error "Current major version: ${old_parts[0]}, New major version: ${new_parts[0]}"
+            return 1
+        fi
+    fi
+    
+    # Minor version diff cannot be negative values, decimal values, more than 1
+    if [ $minor_diff -lt 0 ]; then
+        print_error "Minor version diff cannot be negative values"
+        return 1
+    fi
+    
+    if [ $minor_diff -gt 1 ] || [ $patch_diff -gt 1 ]; then
+        print_error "Minor version diff and patch version diff cannot be more than 1"
+        return 1
+    fi
+    
+    # When minor version updated, the patch version should be reset to 0
+    if [ $minor_diff -gt 0 ] && [ ${new_parts[2]} -ne 0 ]; then
+        print_error "When minor version updated, the patch version should be reset to 0"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Get the remote and URL being pushed to
+remote="$1"
+url="$2"
+
+print_info "Running pre-push hook for version validation..."
+
+# Get list of commits being pushed
+# Compare against the target branch (where we're pushing to)
+# The remote and URL are passed as arguments to pre-push hook
+target_branch=""
+if [[ "$url" == *"origin"* ]] || [[ "$remote" == "origin" ]]; then
+    # Determine target branch from current branch or default to prod-v1
+    current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    if [[ "$current_branch" == "prod-v1" ]]; then
+        target_branch="origin/prod-v1"
+    else
+        # For feature branches, compare against prod-v1
+        target_branch="origin/prod-v1"
+    fi
+else
+    # Fallback to upstream if available
+    target_branch="@{u}"
+fi
+
+print_info "Comparing against target branch: $target_branch"
+
+# Get commits that would be pushed
+if git rev-parse "$target_branch" >/dev/null 2>&1; then
+    commits_being_pushed=$(git rev-list "$target_branch"..HEAD 2>/dev/null)
+else
+    print_warning "Target branch $target_branch not found, using all commits in current branch"
+    commits_being_pushed=$(git rev-list HEAD)
+fi
+
+if [ -z "$commits_being_pushed" ]; then
+    print_info "No new commits to push."
+    exit 0
+fi
+
+print_info "Found commits to push: $(echo "$commits_being_pushed" | wc -l) commits"
+
+# Check for application changes in the commits being pushed
+application_services=()
+version_changes=()
+
+# Collect all application services that have changes (excluding certain files)
+while IFS= read -r commit; do
+    files_changed=$(git diff-tree --no-commit-id --name-only -r "$commit")
+    while IFS= read -r file; do
+        if [[ $file == application/* ]]; then
+            service_name=$(echo $file | cut -d'/' -f2)
+            
+            # Extract the file name from the path
+            filename=$(basename "$file")
+            
+            # Skip files that shouldn't trigger version validation
+            if [[ "$filename" == "CHANGELOG.md" ]] || \
+               [[ "$filename" == "Makefile" ]] || \
+               [[ "$filename" == "docker-compose.yaml" ]]; then
+                print_info "Skipping file (excluded from validation trigger): $file"
+                continue
+            fi
+            
+            if [[ ! " ${application_services[@]} " =~ " ${service_name} " ]]; then
+                application_services+=("$service_name")
+            fi
+            
+            # Check for VERSION file changes
+            if [[ $file == application/*/VERSION ]]; then
+                if [[ ! " ${version_changes[@]} " =~ " ${service_name} " ]]; then
+                    version_changes+=("$service_name")
+                fi
+            fi
+        fi
+    done <<< "$files_changed"
+done <<< "$commits_being_pushed"
+
+if [ ${#application_services[@]} -eq 0 ]; then
+    print_info "No application services modified. Skipping validation."
+    exit 0
+fi
+
+print_info "Application services with changes: ${application_services[*]}"
+
+# Validate all changed applications have updated versions from base branch
+print_info "=== VERSION UPDATE VALIDATION ==="
+version_validation_failed=false
+
+for service in "${application_services[@]}"; do
+    version_file="application/$service/VERSION"
+    
+    if [ ! -f "$version_file" ]; then
+        print_warning "VERSION file not found for service $service. Skipping version validation."
+        continue
+    fi
+    
+    current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+    base_version=""
+    
+    # Get version from base branch (prod-v1)
+    if git show origin/prod-v1:"$version_file" &>/dev/null; then
+        base_version=$(git show origin/prod-v1:"$version_file" | tr -d '\n\r' | tr -d ' ')
+    else
+        print_warning "VERSION file for $service not found in base branch (prod-v1). Using 0.0.0 as base."
+        base_version="0.0.0"
+    fi
+    
+    print_info "Service: $service | Base: $base_version | Current: $current_version"
+    
+    # Check if version was updated from base branch
+    if [ "$current_version" = "$base_version" ]; then
+        print_error "VERSION file for service '$service' was not updated from base branch"
+        print_error "  Base branch version: $base_version"
+        print_error "  Current version: $current_version"
+        print_error "  Service has changes but version remains the same!"
+        version_validation_failed=true
+    fi
+done
+
+# If any service failed version validation, exit with error
+if [ "$version_validation_failed" = true ]; then
+    print_error ""
+    print_error "VERSION UPDATE VALIDATION FAILED"
+    print_error ""
+    print_error "Rule: All modified services must have their VERSION files updated from the base branch."
+    print_error ""
+    print_error "To fix this issue:"
+    print_error "1. For each modified service, update its VERSION file:"
+    for service in "${application_services[@]}"; do
+        version_file="application/$service/VERSION"
+        if [ -f "$version_file" ]; then
+            current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+            base_version=""
+            if git show origin/prod-v1:"$version_file" &>/dev/null; then
+                base_version=$(git show origin/prod-v1:"$version_file" | tr -d '\n\r' | tr -d ' ')
+            else
+                base_version="0.0.0"
+            fi
+            
+            if [ "$current_version" = "$base_version" ]; then
+                print_error "   - $service: Edit application/$service/VERSION"
+                print_error "     Current: $current_version"
+                print_error "     Suggested patch: $(echo $current_version | awk -F. '{print $1"."$2"."($3+1)}')"
+                print_error "     Suggested minor: $(echo $current_version | awk -F. '{print $1"."($2+1)".0"}')"
+            fi
+        fi
+    done
+    print_error ""
+    print_error "2. Commit the version changes and push again"
+    print_error ""
+    print_error "This policy ensures:"
+    print_error "  • Proper version tracking from base branch"
+    print_error "  • Clear release management"
+    print_error "  • Consistent versioning across deployments"
+    exit 1
+fi
+
+print_success "Version update validation passed: All services have updated versions from base branch"
+
+# Process each service
+for service in "${application_services[@]}"; do
+    version_file="application/$service/VERSION"
+    
+    if [ ! -f "$version_file" ]; then
+        print_warning "VERSION file not found for service $service. Skipping."
+        continue
+    fi
+    
+    current_version=$(cat "$version_file" | tr -d '\n\r' | tr -d ' ')
+    
+    # Get the previous version from base branch (prod-v1) for consistent comparison
+    # This ensures all developers and CI systems use the same reference point
+    # and provides a clear baseline of what's currently deployed vs. what's being released
+    previous_version=""
+    
+    # Always use base branch as the source of truth for previous version
+    if git show origin/prod-v1:"$version_file" &>/dev/null; then
+        previous_version=$(git show origin/prod-v1:"$version_file" | tr -d '\n\r' | tr -d ' ')
+        print_info "Found previous version from base branch (prod-v1): $previous_version"
+    else
+        print_warning "VERSION file for $service not found in base branch (prod-v1). This might be a new service."
+    fi
+
+    # If no previous version found, use a default
+    if [ -z "$previous_version" ]; then
+        print_warning "No previous version found for service $service. Using 0.0.0 as default."
+        previous_version="0.0.0"
+    fi
+    # If no current version found, use a default
+    if [ -z "$current_version" ]; then
+        print_warning "No current version found for service $service. Using 0.0.0 as default."
+        current_version="0.0.0"
+    fi
+    
+    print_info "Service: $service"
+    print_info "Previous version: $previous_version"
+    print_info "Current version: $current_version"
+    
+    # Check if version changed
+    if [ "$current_version" != "$previous_version" ]; then
+        print_info "=== CASE 3: VERSION VALIDATION ==="
+        
+        # Validate version format
+        if ! [[ $current_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            print_error "Invalid version format in $version_file. Expected format: x.y.z"
+            exit 1
+        fi
+        
+        # Validate version increment
+        if ! validate_version_increment "$previous_version" "$current_version"; then
+            exit 1
+        fi
+        
+        print_success "Version validation passed for $service: $previous_version -> $current_version"
+    fi
+done
+
+print_success "Pre-push version validation completed successfully!"
+exit 0

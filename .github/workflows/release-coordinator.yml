@@ -1,0 +1,370 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+name: Release Coordinator
+
+on:
+  workflow_run:
+    workflows: ["Auto Create Tags"]
+    types:
+      - completed
+    branches:
+      - prod-v1
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  coordinate-release:
+    name: Wait for All Push Workflows
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    env:
+      # Configurable workflow list: "name:filename,name:filename"
+      WORKFLOW_CONFIGS: "docker-hub:docker-hub-push.yml,ghcr:ghcr-push.yml"
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Process auto-create-tags completion
+      run: |
+        echo "🔔 Auto-create-tags workflow completed!"
+        echo "Triggering workflow: ${{ github.event.workflow_run.name }}"
+        echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+        echo ""
+        echo "🔍 Now waiting for Docker Hub and GHCR push workflows to complete..."
+        echo ""
+        
+        # Dynamically detect available push workflows
+        echo "🔍 Detecting available push workflows..."
+        available_workflows=()
+        
+        # Get workflow configurations from environment (format: "name:filename,name:filename")
+        if [ -z "$WORKFLOW_CONFIGS" ]; then
+          echo "❌ WORKFLOW_CONFIGS environment variable is required but not set"
+          echo "   Format: 'name:filename,name:filename'"
+          echo "   Example: 'docker-hub:docker-hub-push.yml,ghcr:ghcr-push.yml'"
+          exit 1
+        fi
+        
+        # Convert comma-separated configs to array
+        IFS=',' read -ra workflow_configs <<< "$WORKFLOW_CONFIGS"
+        
+        # Check each workflow configuration
+        for config in "${workflow_configs[@]}"; do
+          workflow_name=$(echo "$config" | cut -d':' -f1)
+          workflow_file=$(echo "$config" | cut -d':' -f2)
+          
+          echo "   🔍 Checking $workflow_file..."
+          
+          # Get workflow status from API
+          workflow_response=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$workflow_file")
+          
+          if echo "$workflow_response" | jq -e '.state' >/dev/null 2>&1; then
+            workflow_state=$(echo "$workflow_response" | jq -r '.state')
+            if [ "$workflow_state" = "active" ]; then
+              available_workflows+=("$workflow_name")
+              echo "      ✅ Found and enabled: $workflow_file"
+            else
+              echo "      ⚠️ Found but disabled: $workflow_file (state: $workflow_state)"
+            fi
+          else
+            echo "      ❌ Not found: $workflow_file"
+          fi
+        done
+        
+        # Use detected workflows as expected workflows
+        expected_workflows=("${available_workflows[@]}")
+        
+        if [ ${#expected_workflows[@]} -eq 0 ]; then
+          echo "⚠️ No push workflows detected! No Docker builds to coordinate."
+          echo "🚫 Skipping release coordination - no builds mean no release needed."
+          echo "💡 If you want releases without Docker builds, configure the auto-create-releases workflow to trigger directly from auto-create-tags."
+          exit 0
+        fi
+        
+        echo ""
+        echo "📋 Will wait for these push workflows:"
+        printf '   - %s\n' "${expected_workflows[@]}"
+        echo ""
+        
+        # Track completion status of all push workflows
+        declare -A workflow_status
+        all_completed=true
+        failed_workflows=()
+        completed_workflows=()
+        
+        echo "🔍 Monitoring push workflows for completion..."
+        echo "============================================"
+        
+        # Wait with polling for both workflows to complete
+        max_wait_minutes=15
+        poll_interval_seconds=30
+        max_attempts=$((max_wait_minutes * 60 / poll_interval_seconds))
+        attempt=1
+        
+        echo "⏳ Will poll every ${poll_interval_seconds}s for up to ${max_wait_minutes} minutes"
+        echo ""
+        
+        # Track if we found any workflows that indicate "no tags created"
+        no_tags_workflows=()
+        workflows_with_no_tags=0
+        
+        while [ $attempt -le $max_attempts ]; do
+          echo "� Polling attempt $attempt/$max_attempts ($(date))"
+          
+          # Reset status for this polling round
+          all_completed=true
+          failed_workflows=()
+          completed_workflows=()
+          
+          for workflow in "${expected_workflows[@]}"; do
+            echo "   📊 Checking $workflow push workflow..."
+            
+            # Get recent workflow runs triggered after the auto-create-tags workflow
+            runs=$(curl -s \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs?workflow_id=${workflow}-push.yml&branch=prod-v1&per_page=10")
+            
+            if [ $? -eq 0 ] && [ "$(echo "$runs" | jq -r '.workflow_runs | length')" -gt 0 ]; then
+              # Find the most recent run (since we're running in parallel, look for recent runs)
+              current_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+              
+              # Look for recent runs (within last 10 minutes)
+              recent_run=$(echo "$runs" | jq -r --arg time "$current_time" '
+                [.workflow_runs[] | select(.status == "in_progress" or .status == "queued" or .status == "completed")] | 
+                sort_by(.created_at) | 
+                reverse | 
+                .[0] // empty')
+              
+              if [ -n "$recent_run" ] && [ "$recent_run" != "null" ]; then
+                status=$(echo "$recent_run" | jq -r '.status // "unknown"')
+                conclusion=$(echo "$recent_run" | jq -r '.conclusion // "unknown"')
+                run_id=$(echo "$recent_run" | jq -r '.id // "unknown"')
+                
+                echo "      📋 Found run #$run_id - Status: $status, Conclusion: $conclusion"
+                
+                if [ "$status" = "completed" ]; then
+                  if [ "$conclusion" = "success" ]; then
+                    # Check if this workflow had no tags to process
+                    jobs_data=$(curl -s \
+                      -H "Accept: application/vnd.github.v3+json" \
+                      -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                      "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id/jobs")
+                    
+                    # Look for the "Handle No Tags Created" job
+                    no_tags_job=$(echo "$jobs_data" | jq -r '.jobs[] | select(.name == "Handle No Tags Created") | .conclusion // empty')
+                    
+                    if [ "$no_tags_job" = "success" ]; then
+                      echo "      ℹ️ $workflow: COMPLETED but no tags were created (skipped builds)"
+                      no_tags_workflows+=("$workflow")
+                      workflows_with_no_tags=$((workflows_with_no_tags + 1))
+                      workflow_status["$workflow"]="no-tags"
+                    else
+                      echo "      ✅ $workflow: COMPLETED successfully with builds"
+                      completed_workflows+=("$workflow")
+                      workflow_status["$workflow"]="success"
+                    fi
+                  else
+                    echo "      ❌ $workflow: FAILED ($conclusion)"
+                    failed_workflows+=("$workflow")
+                    workflow_status["$workflow"]="failed"
+                    all_completed=false
+                  fi
+                else
+                  echo "      ⏳ $workflow: Still running ($status)"
+                  workflow_status["$workflow"]="running"
+                  all_completed=false
+                fi
+              else
+                echo "      ⚠️ $workflow: No recent runs found yet"
+                workflow_status["$workflow"]="not-started"
+                all_completed=false
+              fi
+            else
+              echo "      ⚠️ $workflow: Could not get workflow status"
+              all_completed=false
+            fi
+          done
+          
+          echo ""
+          total_handled=$((${#completed_workflows[@]} + ${#no_tags_workflows[@]}))
+          echo "   📊 Current status: $total_handled/${#expected_workflows[@]} workflows completed"
+          
+          # Check if we're done
+          if [ "$all_completed" = true ] && [ $total_handled -eq ${#expected_workflows[@]} ]; then
+            if [ ${#completed_workflows[@]} -gt 0 ]; then
+              echo "   🎉 All workflows with builds completed successfully!"
+            elif [ ${#no_tags_workflows[@]} -eq ${#expected_workflows[@]} ]; then
+              echo "   ℹ️ All workflows completed but no tags were created - no release needed!"
+            else
+              echo "   🎉 All workflows completed!"
+            fi
+            break
+          elif [ ${#failed_workflows[@]} -gt 0 ]; then
+            echo "   ❌ Some workflows failed, stopping coordination"
+            break
+          else
+            if [ $attempt -lt $max_attempts ]; then
+              echo "   ⏳ Waiting ${poll_interval_seconds}s before next check..."
+              sleep $poll_interval_seconds
+            fi
+          fi
+          
+          attempt=$((attempt + 1))
+        done
+        
+        echo "============================================"
+        echo "📊 Coordination Summary:"
+        
+        if [ ${#failed_workflows[@]} -gt 0 ]; then
+          echo "❌ Failed workflows:"
+          printf '   - %s\n' "${failed_workflows[@]}"
+          echo "🚫 Will NOT create release due to failures"
+          exit 1
+        fi
+        
+        echo ""
+        echo "📋 Current Status Summary:"
+        for workflow in "${expected_workflows[@]}"; do
+          if [[ -v "workflow_status[$workflow]" ]]; then
+            status="${workflow_status[$workflow]}"
+            case "$status" in
+              "success") echo "   ✅ $workflow: COMPLETED with builds" ;;
+              "no-tags") echo "   ℹ️ $workflow: COMPLETED (no tags created)" ;;
+              "failed") echo "   ❌ $workflow: FAILED" ;;
+              "pending") echo "   ⏳ $workflow: PENDING" ;;
+              *) echo "   ❓ $workflow: UNKNOWN ($status)" ;;
+            esac
+          else
+            echo "   ❓ $workflow: NO STATUS"
+          fi
+        done
+        
+        total_handled=$((${#completed_workflows[@]} + ${#no_tags_workflows[@]}))
+        
+        if [ "$all_completed" = true ] && [ $total_handled -eq ${#expected_workflows[@]} ]; then
+          echo ""
+          
+          # Check if we should create a release
+          if [ ${#completed_workflows[@]} -gt 0 ]; then
+            echo "🎉 ALL WORKFLOWS WITH BUILDS COMPLETED SUCCESSFULLY!"
+            echo "📊 Final Status: ${#completed_workflows[@]} workflows with builds, ${#no_tags_workflows[@]} workflows with no tags"
+            
+            if [ ${#completed_workflows[@]} -gt 0 ]; then
+              echo "   ✅ Workflows with builds:"
+              printf '      - %s\n' "${completed_workflows[@]}"
+            fi
+            
+            if [ ${#no_tags_workflows[@]} -gt 0 ]; then
+              echo "   ℹ️ Workflows with no tags:"
+              printf '      - %s\n' "${no_tags_workflows[@]}"
+            fi
+            
+            echo ""
+            echo "🚀 Triggering release creation NOW..."
+            
+            # Create JSON array of completed workflow names for the payload
+            completed_json=$(printf '%s\n' "${completed_workflows[@]}" | jq -R -s -c 'split("\n")[:-1]')
+            
+            # Dispatch release creation
+            if curl -X POST \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token ${{ secrets.BYPASS_PAT || secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/dispatches" \
+              -d "{\"event_type\":\"docker-builds-completed\",\"client_payload\":{\"triggered_by\":\"release-coordinator\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"completed_workflows\":$completed_json,\"total_workflows\":${#completed_workflows[@]}}}"; then
+              echo "✅ Successfully triggered auto-create-releases"
+            else
+              echo "❌ Failed to trigger release creation"
+              exit 1
+            fi
+          elif [ ${#no_tags_workflows[@]} -eq ${#expected_workflows[@]} ]; then
+            echo "🚫 ALL WORKFLOWS REPORTED NO TAGS CREATED"
+            echo "📊 Final Status: No new tags were created by any workflow"
+            printf '   ℹ️ %s\n' "${no_tags_workflows[@]}"
+            echo ""
+            echo "🚫 **NO RELEASE WILL BE CREATED** - no new versions to release"
+            echo "💡 This prevents unnecessary releases when no VERSION files have changed"
+            echo ""
+            echo "**Next Steps:**"
+            echo "- Update VERSION files in application directories to create new releases"
+            echo "- Ensure the auto-create-tags workflow has new versions to process"
+          else
+            echo "🎉 ALL WORKFLOWS COMPLETED!"
+            echo "📊 Mixed results: ${#completed_workflows[@]} with builds, ${#no_tags_workflows[@]} without tags"
+            
+            if [ ${#completed_workflows[@]} -gt 0 ]; then
+              echo "Since some workflows had builds, triggering release creation..."
+              completed_json=$(printf '%s\n' "${completed_workflows[@]}" | jq -R -s -c 'split("\n")[:-1]')
+              
+              if curl -X POST \
+                -H "Accept: application/vnd.github.v3+json" \
+                -H "Authorization: token ${{ secrets.BYPASS_PAT || secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/dispatches" \
+                -d "{\"event_type\":\"docker-builds-completed\",\"client_payload\":{\"triggered_by\":\"release-coordinator\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"completed_workflows\":$completed_json,\"total_workflows\":${#completed_workflows[@]}}}"; then
+                echo "✅ Successfully triggered auto-create-releases"
+              else
+                echo "❌ Failed to trigger release creation"
+                exit 1
+              fi
+            fi
+          fi
+        else
+          echo ""
+          echo "⏳ NOT ALL WORKFLOWS COMPLETED YET"
+          echo "📊 Progress: $total_handled/${#expected_workflows[@]} workflows handled"
+          
+          if [ ${#completed_workflows[@]} -gt 0 ]; then
+            echo "   ✅ Completed with builds:"
+            printf '      - %s\n' "${completed_workflows[@]}"
+          fi
+          
+          if [ ${#no_tags_workflows[@]} -gt 0 ]; then
+            echo "   ℹ️ Completed with no tags:"
+            printf '      - %s\n' "${no_tags_workflows[@]}"
+          fi
+          
+          # Show what we're still waiting for
+          pending_workflows=()
+          for workflow in "${expected_workflows[@]}"; do
+            if [[ -v "workflow_status[$workflow]" ]]; then
+              status="${workflow_status[$workflow]}"
+              if [ "$status" != "success" ] && [ "$status" != "no-tags" ]; then
+                pending_workflows+=("$workflow ($status)")
+              fi
+            else
+              pending_workflows+=("$workflow (no report)")
+            fi
+          done
+          
+          if [ ${#pending_workflows[@]} -gt 0 ]; then
+            echo "   ⏳ Still waiting for:"
+            printf '      - %s\n' "${pending_workflows[@]}"
+          fi
+          
+          echo ""
+          echo "💡 Release will be triggered only if at least one workflow completes with builds"
+        fi
+    
+    - name: Cleanup artifacts
+      if: always()  # Run even if previous steps failed
+      uses: geekyeggo/delete-artifact@v5
+      with:
+        name: created-tags
+        failOnError: false
+
+    - name: Print summary
+      if: success()
+      run: |
+        echo "## 🎯 Release Coordinator Completed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Triggered By**: ${{ github.event.workflow_run.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Trigger Status**: ${{ github.event.workflow_run.conclusion }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Coordination Result**: All push workflows completed successfully" >> $GITHUB_STEP_SUMMARY
+        echo "**Action**: Dispatched \`docker-builds-completed\` event" >> $GITHUB_STEP_SUMMARY
+        echo "**Cleanup**: Artifacts cleaned up immediately" >> $GITHUB_STEP_SUMMARY
+        echo "**Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY

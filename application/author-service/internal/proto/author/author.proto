@@ -1,0 +1,69 @@
+// Copyright 2025 Rodericus Ifo Krista
+// SPDX-License-Identifier: MIT
+
+syntax = "proto3";
+
+package author;
+
+option go_package = "author-service/internal/proto/author;author";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message Meta {
+    int32 CurrentPage = 1 [json_name = "current_page"];
+    int32 TotalDataPerPage = 2 [json_name = "total_data_per_page"];
+    int32 TotalData = 3 [json_name = "total_data"];
+    int32 TotalPage = 4 [json_name = "total_page"];
+}
+
+message Author {
+    uint32 ID = 1 [json_name = "id"];
+    string XID = 2 [json_name = "xid"];
+    string Name = 3 [json_name = "name"];
+    optional string Bio = 4 [json_name = "bio"];
+    google.protobuf.Timestamp CreatedAt = 5 [json_name = "created_at"];
+    google.protobuf.Timestamp UpdatedAt = 6 [json_name = "updated_at"];
+}
+
+service AuthorHandler {
+    rpc CreateAuthor (CreateAuthorRequest) returns (google.protobuf.Empty);
+    rpc GetAuthors (GetAuthorsRequest) returns (GetAuthorsResponse);
+    rpc GetAuthor (GetAuthorRequest) returns (GetAuthorResponse);
+    rpc UpdateAuthor (UpdateAuthorRequest) returns (google.protobuf.Empty);
+    rpc DeleteAuthor (DeleteAuthorRequest) returns (google.protobuf.Empty);
+}
+
+message CreateAuthorRequest {
+    string Name = 1 [json_name = "name"];
+    optional string Bio = 2 [json_name = "bio"];
+}
+
+message GetAuthorsRequest {
+    optional int32 Page = 1 [json_name = "page"];
+    optional int32 Limit = 2 [json_name = "limit"];
+}
+
+message GetAuthorsResponse {
+    Meta Meta = 1 [json_name = "meta"];
+    repeated Author Data = 2 [json_name = "data"];
+}
+
+message GetAuthorRequest {
+    string XID = 1 [json_name = "xid"];
+    optional uint32 ID = 2 [json_name = "id"];
+}
+
+message GetAuthorResponse {
+    Author Data = 1 [json_name = "data"];
+}
+
+message UpdateAuthorRequest {
+    string XID = 1 [json_name = "xid"];
+    optional string Name = 2 [json_name = "name"];
+    optional string Bio = 3 [json_name = "bio"];
+}
+
+message DeleteAuthorRequest {
+    string XID = 1 [json_name = "xid"];
+}

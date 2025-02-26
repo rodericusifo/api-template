@@ -1,0 +1,55 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  primary_redis:
+    image: redis/redis-stack-server:latest
+    container_name: primary_redis_${ENV}
+    environment:
+      - REDIS_ARGS=--user ${DATABASE_CACHE_REDIS_USERNAME} on +@all ~* >${DATABASE_CACHE_REDIS_PASSWORD} --requirepass ${DATABASE_CACHE_REDIS_PASSWORD}
+    ports:
+      - 6380:6379
+    restart: always
+    volumes:
+      - primary_redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  replica_redis:
+    image: redis/redis-stack-server:latest
+    container_name: replica_redis_${ENV}
+    environment:
+      - REDIS_ARGS=--replicaof primary_redis 6379 --user ${DATABASE_CACHE_REDIS_USERNAME} on +@all ~* >${DATABASE_CACHE_REDIS_PASSWORD} --requirepass ${DATABASE_CACHE_REDIS_PASSWORD} --masterauth ${DATABASE_CACHE_REDIS_PASSWORD}
+    ports:
+      - 6381:6379
+    restart: always
+    volumes:
+      - replica_redis_data:/data
+    networks:
+      - backend
+    depends_on:
+      primary_redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  primary_redis_data:
+    external: true
+    name: ${SLUG}_primary_redis_data_${ENV}
+  replica_redis_data:
+    external: true
+    name: ${SLUG}_replica_redis_data_${ENV}
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_backend_${ENV}
