@@ -1,7 +1,7 @@
 # Copyright 2025 Rodericus Ifo Krista
 # SPDX-License-Identifier: MIT
 
-name: Push to GitHub Container Registry
+name: Auto Push to Docker Hub
 
 on:
   workflow_run:
@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
   actions: write
 
 jobs:
@@ -107,7 +106,7 @@ jobs:
           if [ -z "$created_tags_json" ] || [ "$created_tags_json" = "[]" ]; then
             echo "ℹ️ No new tags were created by auto-create-tags workflow"
             echo "created_tags_json=[]"
-            echo "Skipping GHCR push - no new images to build"
+            echo "Skipping Docker Hub push - no new images to build"
             echo "tags=[]" >> $GITHUB_OUTPUT
             echo "no_tags_created=true" >> $GITHUB_OUTPUT
             exit 0
@@ -179,7 +178,7 @@ jobs:
           echo "## ℹ️ No Docker Images to Build" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Status:** No new tags were created by the auto-create-tags workflow" >> $GITHUB_STEP_SUMMARY
-          echo "**Action:** Skipping GHCR push - no new images to build" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** Skipping Docker Hub push - no new images to build" >> $GITHUB_STEP_SUMMARY
           echo "**Reason:** Either no VERSION files changed or all tags already exist" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
@@ -205,18 +204,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-${{ matrix.application }}
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ github.event.repository.name }}-${{ matrix.application }}
           tags: |
             type=raw,value=${{ matrix.version }}
             type=raw,value=latest
@@ -252,10 +250,10 @@ jobs:
 
       - name: Print summary
         run: |
-          echo "## GitHub Container Registry Push Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker Hub Push Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Application:** ${{ matrix.application }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry:** GitHub Container Registry (ghcr.io)" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** Docker Hub" >> $GITHUB_STEP_SUMMARY
           echo "**Trigger:** Workflow Run" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Tag:** ${{ matrix.tag }}" >> $GITHUB_STEP_SUMMARY
@@ -267,11 +265,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Tags pushed:**" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Pull the image:" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-${{ matrix.application }}:${{ matrix.version }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
 
   # Job to report completion after all builds finish
   report-completion:
@@ -292,10 +285,10 @@ jobs:
           # Determine overall status
           if [ "$find_tags_result" = "success" ] && [ "$build_push_result" = "success" ]; then
             overall_status="success"
-            echo "✅ All GHCR operations completed successfully"
+            echo "✅ All Docker Hub operations completed successfully"
           else
             overall_status="failure"
-            echo "❌ GHCR workflow had failures"
+            echo "❌ Docker Hub workflow had failures"
             echo "   - Find tags: $find_tags_result"
             echo "   - Build and push: $build_push_result"
           fi
@@ -306,10 +299,10 @@ jobs:
       - name: Print completion summary
         run: |
           overall_status="${{ steps.status.outputs.overall_status }}"
-          echo "🎯 GHCR Workflow Completed!"
+          echo "🎯 Docker Hub Workflow Completed!"
           echo "Overall Status: $overall_status"
-          echo "Registry: ghcr"
-          echo "Workflow: ghcr-push"
+          echo "Registry: docker-hub"
+          echo "Workflow: docker-hub-push"
           echo ""
           echo "📊 Job Results:"
           echo "   - Find tags: ${{ needs.find-tags.result }}"
