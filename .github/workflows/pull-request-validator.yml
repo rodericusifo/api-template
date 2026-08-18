@@ -28,7 +28,7 @@ jobs:
     
     - name: Fetch base branch
       run: |
-        git fetch origin prod-v1:prod-v1
+        git fetch --no-tags --prune origin prod-v1:prod-v1 || true
     
     - name: Check application changes
       id: check-changes

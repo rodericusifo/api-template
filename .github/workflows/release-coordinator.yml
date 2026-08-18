@@ -22,7 +22,7 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     env:
       # Configurable workflow list: "name:filename,name:filename"
-      WORKFLOW_CONFIGS: "docker-hub:docker-hub-push.yml,ghcr:ghcr-push.yml"
+      WORKFLOW_CONFIGS: "docker-hub:auto-docker-hub-push.yml,ghcr:auto-ghcr-push.yml"
     
     steps:
     - name: Checkout code
@@ -124,11 +124,28 @@ jobs:
           for workflow in "${expected_workflows[@]}"; do
             echo "   📊 Checking $workflow push workflow..."
             
-            # Get recent workflow runs triggered after the auto-create-tags workflow
+            # Resolve workflow file name from WORKFLOW_CONFIGS
+            workflow_file=""
+            for cfg in "${workflow_configs[@]}"; do
+              name=$(echo "$cfg" | cut -d':' -f1)
+              file=$(echo "$cfg" | cut -d':' -f2)
+              if [ "$name" = "$workflow" ]; then
+                workflow_file="$file"
+                break
+              fi
+            done
+            if [ -z "$workflow_file" ]; then
+              echo "      ⚠️ No workflow file configured for $workflow"
+              workflow_status["$workflow"]="not-configured"
+              all_completed=false
+              continue
+            fi
+
+            # Get recent workflow runs for the workflow file
             runs=$(curl -s \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runs?workflow_id=${workflow}-push.yml&branch=prod-v1&per_page=10")
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs?workflow_id=$workflow_file&branch=prod-v1&per_page=10")
             
             if [ $? -eq 0 ] && [ "$(echo "$runs" | jq -r '.workflow_runs | length')" -gt 0 ]; then
               # Find the most recent run (since we're running in parallel, look for recent runs)
