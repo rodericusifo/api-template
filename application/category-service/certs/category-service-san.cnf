@@ -12,6 +12,7 @@ OU = IT
 CN = category-service
 
 [v3_req]
+extendedKeyUsage = serverAuth, clientAuth
 subjectAltName = @alt_names
 
 [alt_names]
