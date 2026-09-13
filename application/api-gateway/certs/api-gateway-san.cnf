@@ -12,6 +12,7 @@ OU = IT
 CN = api-gateway
 
 [v3_req]
+extendedKeyUsage = clientAuth
 subjectAltName = @alt_names
 
 [alt_names]
