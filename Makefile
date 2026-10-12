@@ -58,15 +58,15 @@ start:
 	$(call check_env,$(MAKECMDGOALS))
 	@$(ECHO_CMD) "$(call log_action,Generate App Network ($(NAME) | $(ENV)))"
 	docker network ls | grep $(SLUG)_$(ENV) || docker network create $(SLUG)_$(ENV)
-	@make -C resource/database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-sql
-	@make -C resource/database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-cache
-	@make -C resource/broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-broker
-	@make -C application APPLICATIONS="$(APPLICATIONS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-application
+	@make -C infrastructure/database/sql DATABASE_SQL="$(DATABASE_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-sql
+	@make -C infrastructure/cache CACHE="$(CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-cache
+	@make -C infrastructure/messaging MESSAGING="$(MESSAGING)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-messaging
+	@make -C application APPLICATION="$(APPLICATION)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-application
 
 .PHONY: stop
 stop:
 	$(call check_env,$(MAKECMDGOALS))
-	@make -C resource/database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-sql
-	@make -C resource/database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-cache
-	@make -C resource/broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-broker
-	@make -C application APPLICATIONS="$(APPLICATIONS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-application
+	@make -C infrastructure/database/sql DATABASE_SQL="$(DATABASE_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-sql
+	@make -C infrastructure/cache CACHE="$(CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-cache
+	@make -C infrastructure/messaging MESSAGING="$(MESSAGING)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-messaging
+	@make -C application APPLICATION="$(APPLICATION)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-application

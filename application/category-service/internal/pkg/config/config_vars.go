@@ -51,9 +51,9 @@ type varsConfig *struct {
 	DatabaseSQLPostgresReplicaDebugMode         bool          `mapstructure:"DATABASE_SQL_POSTGRES_REPLICA_DEBUG_MODE"`
 
 	// DATABASE CACHE
-	DatabaseCacheRedisEnabled    bool   `mapstructure:"DATABASE_CACHE_REDIS_ENABLED"`
-	DatabaseCacheRedisPrimaryURL string `mapstructure:"DATABASE_CACHE_REDIS_PRIMARY_URL"`
-	DatabaseCacheRedisReplicaURL string `mapstructure:"DATABASE_CACHE_REDIS_REPLICA_URL"`
+	CacheRedisEnabled    bool   `mapstructure:"CACHE_REDIS_ENABLED"`
+	CacheRedisPrimaryURL string `mapstructure:"CACHE_REDIS_PRIMARY_URL"`
+	CacheRedisReplicaURL string `mapstructure:"CACHE_REDIS_REPLICA_URL"`
 
 	// PASSWORD HASHING
 	PasswordHashingHashSalt int `mapstructure:"PASSWORD_HASHING_HASH_SALT"`

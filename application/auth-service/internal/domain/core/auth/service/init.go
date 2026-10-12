@@ -9,7 +9,7 @@ import (
 	"auth-service/internal/domain/repository/database/sql/role"
 	"auth-service/internal/domain/repository/database/sql/user"
 
-	cache_user "auth-service/internal/domain/repository/database/cache/user"
+	cache_user "auth-service/internal/domain/repository/cache/user"
 )
 
 type IAuthService interface {
@@ -19,18 +19,18 @@ type IAuthService interface {
 
 type AuthService struct {
 	UserDatabaseSQLRepository   user.IUserDatabaseSQLRepository
-	UserDatabaseCacheRepository cache_user.IUserDatabaseCacheRepository
+	UserCacheRepository cache_user.IUserCacheRepository
 	RoleDatabaseSQLRepository   role.IRoleDatabaseSQLRepository
 }
 
 func InitAuthService(
 	userDatabaseSQLRepository user.IUserDatabaseSQLRepository,
-	userDatabaseCacheRepository cache_user.IUserDatabaseCacheRepository,
+	userCacheRepository cache_user.IUserCacheRepository,
 	roleDatabaseSQLRepository role.IRoleDatabaseSQLRepository,
 ) IAuthService {
 	return &AuthService{
 		UserDatabaseSQLRepository:   userDatabaseSQLRepository,
-		UserDatabaseCacheRepository: userDatabaseCacheRepository,
+		UserCacheRepository: userCacheRepository,
 		RoleDatabaseSQLRepository:   roleDatabaseSQLRepository,
 	}
 }

@@ -2,6 +2,7 @@
 gen-proto:
 	protoc \
 	--proto_path=internal/proto \
+	--proto_path=/usr/include \
     --go_out=internal/proto --go_opt=paths=source_relative \
     --go-grpc_out=internal/proto --go-grpc_opt=paths=source_relative \
     internal/proto/book/book.proto

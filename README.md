@@ -13,7 +13,7 @@ This template includes:
 
 - 🧱 Modular structure for API services
 - 🐳 Docker for consistent environments
-- 📁 SQL + cache + broker integrations
+- 📁 SQL + cache + messaging integrations
 - 🛠️ Developer-friendly Makefile workflow
 - ✅ Production-ready setup with best practices
 
@@ -24,7 +24,7 @@ This template includes:
 - ✅ Rapid setup using `make`
 - 🧩 Scalable microservices architecture
 - 🐘 PostgreSQL with initialization scripts
-- 🚀 Redpanda & LavinMQ support for brokers
+- 🚀 Redpanda & LavinMQ support for messaging
 - 🔐 Environment isolation via `.env` files
 - 🧠 Redis caching support
 
@@ -79,8 +79,8 @@ This template includes:
    FIELD_C=true
    ```
 
-> **Note:** If you use LavinMQ as one of your message brokers, set `BROKER_LAVINMQ_MAIN_DEFAULT_PASSWORD` using a **hashed password**.  
-> You can generate a hashed password by following these steps:  
+> **Note:** If you use LavinMQ as one of your message messaging, set `MESSAGING_LAVINMQ_MAIN_DEFAULT_PASSWORD` using a **hashed password**.
+> You can generate a hashed password by following these steps:
 >
 > 1. Run a temporary LavinMQ container:
 >
@@ -94,7 +94,7 @@ This template includes:
 >    docker exec -it lavinmq_temp lavinmqctl hash_password yourdesiredpassword
 >    ```
 >
->    Use the result to set `BROKER_LAVINMQ_MAIN_DEFAULT_PASSWORD`.
+>    Use the result to set `MESSAGING_LAVINMQ_MAIN_DEFAULT_PASSWORD`.
 >
 > 3. Remove the temporary container:
 >
@@ -107,10 +107,10 @@ This template includes:
    Edit `stack.mk`:
 
    ```makefile
-   APPLICATIONS := auth-service author-service category-service book-service api-gateway
-   BROKERS := redpanda lavinmq
-   DATABASES_CACHE := redis
-   DATABASES_SQL := postgres
+   APPLICATION := auth-service author-service category-service book-service api-gateway
+   MESSAGING := redpanda lavinmq
+   CACHE := redis
+   DATABASE_SQL := postgres
    ```
 
 4. **Set Up Git Hooks (Required for Development)**
@@ -141,7 +141,7 @@ This template includes:
 
 This template includes automated GitHub workflows for streamlined development and deployment:
 
-### 🛡️ **Pull Request Validations** 
+### 🛡️ **Pull Request Validations**
 *Triggered on: Pull Requests to `prod-v1`*
 
 - ✅ **File validation**: Ensures required `CHANGELOG.md` and `VERSION` files exist for modified services
@@ -259,7 +259,7 @@ Test your APIs in Postman:
 - **Language**: Go, Python, etc.
 - **Database**: PostgreSQL
 - **Cache**: Redis
-- **Broker**: Redpanda, LavinMQ
+- **Messaging**: Redpanda, LavinMQ
 - **Containerization**: Docker
 - **Workflow**: Makefile
 

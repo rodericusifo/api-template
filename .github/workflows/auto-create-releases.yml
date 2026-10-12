@@ -86,19 +86,19 @@ jobs:
           exit 1
         fi
 
-        applications_line=$(grep "^APPLICATIONS" stack.mk | head -1)
+        applications_line=$(grep "^APPLICATION" stack.mk | head -1)
         if [ -z "$applications_line" ]; then
-          echo "❌ Error: APPLICATIONS variable not found in stack.mk"
-          echo "Please define APPLICATIONS in stack.mk file with format: APPLICATIONS := app1 app2 app3"
+          echo "❌ Error: APPLICATION variable not found in stack.mk"
+          echo "Please define APPLICATION in stack.mk file with format: APPLICATION := app1 app2 app3"
           exit 1
         fi
 
-        # Extract applications from the line (remove APPLICATIONS := and convert to array)
-        applications_string=$(echo "$applications_line" | sed 's/^APPLICATIONS[[:space:]]*:=[[:space:]]*//')
+        # Extract applications from the line (remove APPLICATION := and convert to array)
+        applications_string=$(echo "$applications_line" | sed 's/^APPLICATION[[:space:]]*:=[[:space:]]*//')
 
         if [ -z "$applications_string" ]; then
-          echo "❌ Error: APPLICATIONS variable is empty in stack.mk"
-          echo "Please define applications in stack.mk file with format: APPLICATIONS := app1 app2 app3"
+          echo "❌ Error: APPLICATION variable is empty in stack.mk"
+          echo "Please define applications in stack.mk file with format: APPLICATION := app1 app2 app3"
           exit 1
         fi
 

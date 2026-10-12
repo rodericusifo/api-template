@@ -22,7 +22,7 @@ import (
 func (s *AuthService) LoginAuth(payload *input.LoginAuthDTO) (*output.LoginAuthDTO, error) {
 	loginAuthCacheKey := fmt.Sprintf("%s:%s", "login", payload.Email)
 
-	userCacheRes, err := s.UserDatabaseCacheRepository.GetUser(loginAuthCacheKey)
+	userCacheRes, err := s.UserCacheRepository.GetUser(loginAuthCacheKey)
 	if err != nil && err.Error() != "value not found in store" {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func (s *AuthService) LoginAuth(payload *input.LoginAuthDTO) (*output.LoginAuthD
 	if err != nil {
 		return nil, err
 	}
-	err = s.UserDatabaseCacheRepository.SetUser(loginAuthCacheKey, string(bytesLoginAuthDto), config.GetVarsConfig().JWTExpiredDuration)
+	err = s.UserCacheRepository.SetUser(loginAuthCacheKey, string(bytesLoginAuthDto), config.GetVarsConfig().JWTExpiredDuration)
 	if err != nil {
 		return nil, err
 	}
