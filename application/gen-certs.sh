@@ -5,7 +5,7 @@
 # Set the certificates directory
 CERTS_DIR="certs"
 
-# Services to generate certificates for, read from stack.mk's APPLICATIONS
+# Services to generate certificates for, read from stack.mk's APPLICATION
 # variable (single source of truth for the service list).
 # api-gateway gets a client certificate; the rest get server certificates.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,10 +16,10 @@ if [ ! -f "$STACK_MK" ]; then
     exit 1
 fi
 
-applications_line=$(grep -E '^APPLICATIONS[[:space:]]*:=' "$STACK_MK" | sed -E 's/^APPLICATIONS[[:space:]]*:=[[:space:]]*//')
+applications_line=$(grep -E '^APPLICATION[[:space:]]*:=' "$STACK_MK" | sed -E 's/^APPLICATION[[:space:]]*:=[[:space:]]*//')
 
 if [ -z "$applications_line" ]; then
-    echo "Error: APPLICATIONS variable not found in $STACK_MK" >&2
+    echo "Error: APPLICATION variable not found in $STACK_MK" >&2
     exit 1
 fi
 
@@ -55,6 +55,9 @@ for service in "${SERVICES[@]}"; do
     export APPLICATION="$service"
 
     openssl genrsa -out "./$dest/service.key" 2048
+    # Runtime containers use a non-root user, so the bind-mounted key must be
+    # readable by that user regardless of the host user that generated it.
+    chmod 0644 "./$dest/service.key"
     openssl req -new -key "./$dest/service.key" -out "./$dest/service.csr" \
         -config "$cnf"
     openssl x509 -req -in "./$dest/service.csr" -CA "./$dest/ca.crt" -CAkey "./$dest/ca.key" \

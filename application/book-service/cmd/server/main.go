@@ -26,14 +26,14 @@ import (
 func init() {
 	config.ConfigureLog()
 	config.ConfigureVars()
-	config.ConfigureDatabaseCache(constant.REDIS, config.DatabaseCacheDialects{
-		Redis: config.DatabaseCacheConfig[config.DatabaseCacheRedisConfigOptions]{
-			Enabled: config.GetVarsConfig().DatabaseCacheRedisEnabled,
-			Primary: config.DatabaseCacheRedisConfigOptions{
-				URL: config.GetVarsConfig().DatabaseCacheRedisPrimaryURL,
+	config.ConfigureCache(constant.REDIS, config.CacheDialects{
+		Redis: config.CacheConfig[config.CacheRedisConfigOptions]{
+			Enabled: config.GetVarsConfig().CacheRedisEnabled,
+			Primary: config.CacheRedisConfigOptions{
+				URL: config.GetVarsConfig().CacheRedisPrimaryURL,
 			},
-			Replica: config.DatabaseCacheRedisConfigOptions{
-				URL: config.GetVarsConfig().DatabaseCacheRedisReplicaURL,
+			Replica: config.CacheRedisConfigOptions{
+				URL: config.GetVarsConfig().CacheRedisReplicaURL,
 			},
 		},
 	})

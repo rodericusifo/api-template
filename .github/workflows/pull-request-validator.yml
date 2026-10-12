@@ -181,15 +181,15 @@ jobs:
         fi
         
         # Extract applications from stack.mk
-        if ! grep -q "^APPLICATIONS :=" stack.mk; then
-            print_error "APPLICATIONS variable not found in stack.mk"
+        if ! grep -q "^APPLICATION :=" stack.mk; then
+            print_error "APPLICATION variable not found in stack.mk"
             exit 1
         fi
         
-        stack_mk_applications=$(grep "^APPLICATIONS :=" stack.mk | sed 's/APPLICATIONS := //' | tr ' ' '\n' | sort)
+        stack_mk_applications=$(grep "^APPLICATION :=" stack.mk | sed 's/APPLICATION := //' | tr ' ' '\n' | sort)
         
         if [ -z "$stack_mk_applications" ]; then
-            print_error "No applications found in stack.mk APPLICATIONS variable"
+            print_error "No applications found in stack.mk APPLICATION variable"
             exit 1
         fi
         
@@ -289,10 +289,10 @@ jobs:
             fi
             
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Rule:** All applications in the \`application/\` directory must be listed in the \`APPLICATIONS\` variable in \`stack.mk\`." >> $GITHUB_STEP_SUMMARY
+            echo "**Rule:** All applications in the \`application/\` directory must be listed in the \`APPLICATION\` variable in \`stack.mk\`." >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**To fix this issue:**" >> $GITHUB_STEP_SUMMARY
-            echo "1. Update the \`APPLICATIONS\` variable in \`stack.mk\`" >> $GITHUB_STEP_SUMMARY
+            echo "1. Update the \`APPLICATION\` variable in \`stack.mk\`" >> $GITHUB_STEP_SUMMARY
             echo "2. Add missing applications or remove extra ones" >> $GITHUB_STEP_SUMMARY
             echo "3. Ensure the list matches exactly with the \`application/\` directory contents" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -310,14 +310,14 @@ jobs:
         
         if [ "$validation_failed" = true ]; then
             print_error ""
-            print_error "stack.mk APPLICATIONS VALIDATION FAILED"
+            print_error "stack.mk APPLICATION VALIDATION FAILED"
             print_error ""
-            print_error "The APPLICATIONS list in stack.mk does not match the applications in the filesystem."
+            print_error "The APPLICATION list in stack.mk does not match the applications in the filesystem."
             print_error ""
-            print_error "Current stack.mk APPLICATIONS: $(echo "$stack_mk_applications" | tr '\n' ' ')"
+            print_error "Current stack.mk APPLICATION: $(echo "$stack_mk_applications" | tr '\n' ' ')"
             print_error "Expected based on filesystem: $(echo "$filesystem_applications" | tr '\n' ' ')"
             print_error ""
-            print_error "Please update the APPLICATIONS variable in stack.mk to match the filesystem."
+            print_error "Please update the APPLICATION variable in stack.mk to match the filesystem."
             exit 1
         else
             print_success "All applications are properly listed in stack.mk"

@@ -1,0 +1,132 @@
+# Copyright 2025 Rodericus Ifo Krista
+# SPDX-License-Identifier: MIT
+
+services:
+  lavinmq1:
+    image: cloudamqp/lavinmq:latest
+    hostname: lavinmq1
+    container_name: lavinmq1
+    command:
+      - --clustering-advertised-uri=tcp://lavinmq1:5679
+    healthcheck:
+      test: ["CMD", "test", "-S", "/tmp/lavinmqctl.sock"]
+    ports:
+      - 5672:5672
+      - 5679:5679
+      - 15672:15672
+    volumes:
+      - lavinmq1_data:/var/lib/lavinmq
+    configs:
+      - source: lavinmq_config
+        target: /etc/lavinmq/lavinmq.ini
+    depends_on:
+      etcd:
+        condition: service_healthy
+    networks:
+      - backend
+
+  lavinmq2:
+    image: cloudamqp/lavinmq:latest
+    hostname: lavinmq2
+    container_name: lavinmq2
+    command:
+      - --clustering-advertised-uri=tcp://lavinmq2:5679
+    healthcheck:
+      test: ["CMD", "test", "-S", "/tmp/lavinmqctl.sock"]
+    ports:
+      - 5673:5672
+      - 15679:5679
+      - 25672:15672
+    volumes:
+      - lavinmq2_data:/var/lib/lavinmq
+    configs:
+      - source: lavinmq_config
+        target: /etc/lavinmq/lavinmq.ini
+    depends_on:
+      etcd:
+        condition: service_healthy
+    networks:
+      - backend
+
+  lavinmq3:
+    image: cloudamqp/lavinmq:latest
+    hostname: lavinmq3
+    container_name: lavinmq3
+    command:
+      - --clustering-advertised-uri=tcp://lavinmq3:5679
+    healthcheck:
+      test: ["CMD", "test", "-S", "/tmp/lavinmqctl.sock"]
+    ports:
+      - 5674:5672
+      - 25679:5679
+      - 35672:15672
+    volumes:
+      - lavinmq3_data:/var/lib/lavinmq
+    configs:
+      - source: lavinmq_config
+        target: /etc/lavinmq/lavinmq.ini
+    depends_on:
+      etcd:
+        condition: service_healthy
+    networks:
+      - backend
+
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.6.5
+    container_name: etcd_${ENV}
+    ports:
+      - 127.0.0.1:2379:2379
+      - 127.0.0.1:2380:2380
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd
+      - --data-dir=/var/lib/etcd/data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --advertise-client-urls=http://etcd:2379
+      - --initial-cluster=etcd=http://etcd:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=etcd-cluster-0
+    volumes:
+      - etcd_data:/var/lib/etcd/data
+    networks:
+      - backend
+    healthcheck:
+      test: [ "CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    environment:
+      - ETCDCTL_API=3
+
+configs:
+  lavinmq_config:
+    content: |
+      [main]
+      default_user = ${MESSAGING_LAVINMQ_MAIN_DEFAULT_USER}
+      default_password_hash = ${MESSAGING_LAVINMQ_MAIN_DEFAULT_PASSWORD_HASH}
+
+      [clustering]
+      enabled = true
+      bind = 0.0.0.0
+      etcd_endpoints = etcd:2379
+
+volumes:
+  lavinmq1_data:
+    external: true
+    name: ${SLUG}_lavinmq1_data_${ENV}
+  lavinmq2_data:
+    external: true
+    name: ${SLUG}_lavinmq2_data_${ENV}
+  lavinmq3_data:
+    external: true
+    name: ${SLUG}_lavinmq3_data_${ENV}
+  etcd_data:
+    external: true
+    name: ${SLUG}_etcd_data_${ENV}
+
+networks:
+  backend:
+    external: true
+    name: ${SLUG}_${ENV}

@@ -48,7 +48,7 @@ gen-proto:
 .PHONY: run-application
 run-application: gen-certs gen-proto
 	@$(ECHO_CMD) "$(call log_action,Start App ($(NAME) | $(ENV)))"
-	@for application in $(APPLICATIONS); do \
+	@for application in $(APPLICATION); do \
 		$(ECHO_CMD) "$(call log_action,Start App [$${application}] ($(NAME) | $(ENV)))"; \
 		APPLICATION=$${application} ENV=$(ENV) SLUG=$(SLUG) VERSION=$$(cat $${application}/VERSION) docker compose -p $(NAME)_application_$${application} --env-file $${application}/env/$(ENV).env -f $${application}/docker-compose.yaml up --build -d; \
 	done
@@ -57,7 +57,7 @@ run-application: gen-certs gen-proto
 .PHONY: stop-application
 stop-application:
 	@$(ECHO_CMD) "$(call log_action,Stop App ($(NAME) | $(ENV)))"
-	@for application in $(APPLICATIONS); do \
+	@for application in $(APPLICATION); do \
 		$(ECHO_CMD) "$(call log_action,Stop App [$${application}] ($(NAME) | $(ENV)))"; \
 		APPLICATION=$${application} ENV=$(ENV) SLUG=$(SLUG) VERSION=$(cat "$${application}/VERSION") docker compose -p $(NAME)_application_$${application} --env-file $${application}/env/$(ENV).env -f $${application}/docker-compose.yaml down; \
 	done

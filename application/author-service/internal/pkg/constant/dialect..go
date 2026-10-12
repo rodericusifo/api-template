@@ -4,12 +4,12 @@
 package constant
 
 type DialectDatabaseSQL string
-type DialectDatabaseCache string
+type DialectCache string
 
 var (
 	POSTGRES = DialectDatabaseSQL("postgres")
 	MYSQL    = DialectDatabaseSQL("mysql")
 )
 var (
-	REDIS = DialectDatabaseCache("redis")
+	REDIS = DialectCache("redis")
 )
