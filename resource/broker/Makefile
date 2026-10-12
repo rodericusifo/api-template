@@ -61,6 +61,7 @@ run-broker: check-broker
 		$(ECHO_CMD) "$(call log_action,Start App Broker [$${broker}] ($(NAME) | $(ENV)))"; \
 		ENV=$(ENV) SLUG=$(SLUG) docker compose -p $(NAME)_broker --env-file $${broker}/env/$(ENV).env -f $${broker}/docker-compose.yaml up --build -d; \
 	done
+	
 	@$(ECHO_CMD) "$(call log_action_end,Brokers started successfully)"
 
 .PHONY: stop-broker

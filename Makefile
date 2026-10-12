@@ -58,15 +58,15 @@ start:
 	$(call check_env,$(MAKECMDGOALS))
 	@$(ECHO_CMD) "$(call log_action,Generate App Network ($(NAME) | $(ENV)))"
 	docker network ls | grep $(SLUG)_$(ENV) || docker network create $(SLUG)_$(ENV)
-	@make -C database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-sql
-	@make -C database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-cache
-	@make -C broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-broker
+	@make -C resource/database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-sql
+	@make -C resource/database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-cache
+	@make -C resource/broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-broker
 	@make -C application APPLICATIONS="$(APPLICATIONS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-application
 
 .PHONY: stop
 stop:
 	$(call check_env,$(MAKECMDGOALS))
-	@make -C database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-sql
-	@make -C database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-cache
-	@make -C broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-broker
+	@make -C resource/database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-sql
+	@make -C resource/database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-database-cache
+	@make -C resource/broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-broker
 	@make -C application APPLICATIONS="$(APPLICATIONS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" stop-application
