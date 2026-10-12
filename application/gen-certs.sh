@@ -45,19 +45,20 @@ rm -rf ./$CERTS_DIR
 # ========== Generate Service Certificates and Keys ==========
 for service in "${SERVICES[@]}"; do
     dest="$service/$CERTS_DIR"
-    cnf="./$dest/$service-san.cnf"
+    cnf="./$dest/service-san.cnf"
 
-    if [ "$service" == "api-gateway" ]; then
-        echo "Generating Client Certificate ($service)..."
-    else
-        echo "Generating Server Certificate ($service)..."
-    fi
+    echo "Generating Certificate ($service)..."
 
-    openssl genrsa -out "./$dest/$service.key" 2048
-    openssl req -new -key "./$dest/$service.key" -out "./$dest/$service.csr" \
+    # APPLICATION is read by service-san.cnf via OpenSSL's $ENV:: config
+    # expansion, so the CN/SAN always match the service's own directory name
+    # without duplicating it in a committed, per-service config file.
+    export APPLICATION="$service"
+
+    openssl genrsa -out "./$dest/service.key" 2048
+    openssl req -new -key "./$dest/service.key" -out "./$dest/service.csr" \
         -config "$cnf"
-    openssl x509 -req -in "./$dest/$service.csr" -CA "./$dest/ca.crt" -CAkey "./$dest/ca.key" \
-        -CAcreateserial -out "./$dest/$service.crt" -days 365 -sha256 \
+    openssl x509 -req -in "./$dest/service.csr" -CA "./$dest/ca.crt" -CAkey "./$dest/ca.key" \
+        -CAcreateserial -out "./$dest/service.crt" -days 365 -sha256 \
         -extfile "$cnf" -extensions v3_req
 done
 
@@ -65,11 +66,7 @@ done
 for service in "${SERVICES[@]}"; do
     dest="$service/$CERTS_DIR"
 
-    if [ "$service" == "api-gateway" ]; then
-        echo "Verifying Client Certificate ($service)"
-    else
-        echo "Verifying Server Certificate ($service)"
-    fi
+    echo "Verifying Certificate ($service)"
 
-    openssl verify -CAfile "./$dest/ca.crt" "./$dest/$service.crt"
+    openssl verify -CAfile "./$dest/ca.crt" "./$dest/service.crt"
 done

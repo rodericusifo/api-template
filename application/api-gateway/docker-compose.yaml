@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 services:
-  api_gateway:
-    container_name: api_gateway_${ENV}
+  instance-0:
+    container_name: ${APPLICATION}_${ENV}
     tty: true
     build:
       dockerfile: Dockerfile
@@ -12,7 +12,7 @@ services:
         VERSION: ${VERSION}
         NAME: ${NAME}
         MODE: development
-    image: ${SLUG}/api_gateway:${VERSION}
+    image: ${SLUG}/${APPLICATION}:${VERSION}
     environment:
       - ENV=${ENV}
     volumes:
@@ -22,7 +22,9 @@ services:
       - 8081:${SERVER_PORT:-8080}
     restart: on-failure
     networks:
-      - backend
+      backend:
+        aliases:
+          - ${APPLICATION}
     healthcheck:
       test: ["CMD", "nc", "-zv", "localhost", "${SERVER_PORT:-8080}"]
       interval: 10s
@@ -32,4 +34,4 @@ services:
 networks:
   backend:
     external: true
-    name: ${SLUG}_backend_${ENV}
+    name: ${SLUG}_${ENV}

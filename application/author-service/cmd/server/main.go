@@ -59,7 +59,7 @@ func init() {
 }
 
 func main() {
-	certificate, err := loader.LoadCert("/certs/author-service.crt", "/certs/author-service.key")
+	certificate, err := loader.LoadCert("/certs/service.crt", "/certs/service.key")
 	if err != nil {
 		config.GetLogConfig().WithFields(logrus.Fields{
 			"message": "failed to load server certificate and key",

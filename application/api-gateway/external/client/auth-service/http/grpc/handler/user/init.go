@@ -33,7 +33,7 @@ type UserClientHandler struct {
 }
 
 func InitUserClientHandler() IUserClientHandler {
-	certificate, err := loader.LoadCert("/certs/api-gateway.crt", "/certs/api-gateway.key")
+	certificate, err := loader.LoadCert("/certs/service.crt", "/certs/service.key")
 	if err != nil {
 		config.GetLogConfig().WithFields(logrus.Fields{
 			"message": "failed to load server certificate and key",

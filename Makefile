@@ -57,7 +57,7 @@ setup-env:
 start:
 	$(call check_env,$(MAKECMDGOALS))
 	@$(ECHO_CMD) "$(call log_action,Generate App Network ($(NAME) | $(ENV)))"
-	docker network ls | grep $(SLUG)_backend_$(ENV) || docker network create $(SLUG)_backend_$(ENV)
+	docker network ls | grep $(SLUG)_$(ENV) || docker network create $(SLUG)_$(ENV)
 	@make -C database/sql DATABASES_SQL="$(DATABASES_SQL)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-sql
 	@make -C database/cache DATABASES_CACHE="$(DATABASES_CACHE)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-database-cache
 	@make -C broker BROKERS="$(BROKERS)" SLUG="$(SLUG)" NAME="$(NAME)" ENV="$(ENV)" run-broker

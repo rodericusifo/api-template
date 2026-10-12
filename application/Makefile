@@ -50,7 +50,7 @@ run-application: gen-certs gen-proto
 	@$(ECHO_CMD) "$(call log_action,Start App ($(NAME) | $(ENV)))"
 	@for application in $(APPLICATIONS); do \
 		$(ECHO_CMD) "$(call log_action,Start App [$${application}] ($(NAME) | $(ENV)))"; \
-		ENV=$(ENV) SLUG=$(SLUG) VERSION=$$(cat $${application}/VERSION) docker compose -p $(NAME)_application --env-file $${application}/env/$(ENV).env -f $${application}/docker-compose.yaml up --build -d; \
+		APPLICATION=$${application} ENV=$(ENV) SLUG=$(SLUG) VERSION=$$(cat $${application}/VERSION) docker compose -p $(NAME)_application_$${application} --env-file $${application}/env/$(ENV).env -f $${application}/docker-compose.yaml up --build -d; \
 	done
 	@$(ECHO_CMD) "$(call log_action_end,App started successfully)"
 
@@ -59,6 +59,6 @@ stop-application:
 	@$(ECHO_CMD) "$(call log_action,Stop App ($(NAME) | $(ENV)))"
 	@for application in $(APPLICATIONS); do \
 		$(ECHO_CMD) "$(call log_action,Stop App [$${application}] ($(NAME) | $(ENV)))"; \
-		ENV=$(ENV) SLUG=$(SLUG) VERSION=$(cat "$${application}/VERSION") docker compose -p $(NAME)_application --env-file $${application}/env/$(ENV).env -f $${application}/docker-compose.yaml down; \
+		APPLICATION=$${application} ENV=$(ENV) SLUG=$(SLUG) VERSION=$(cat "$${application}/VERSION") docker compose -p $(NAME)_application_$${application} --env-file $${application}/env/$(ENV).env -f $${application}/docker-compose.yaml down; \
 	done
 	@$(ECHO_CMD) "$(call log_action_end,App stopped successfully)"
