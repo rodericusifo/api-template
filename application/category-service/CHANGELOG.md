@@ -5,6 +5,12 @@ All notable changes to the category-service will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-10-12 15:16:32 UTC
+
+### Changes
+
+- chore(api-template): :wrench: refactor and standardize project structure and naming conventions ([1f01e86](https://github.com/rodericusifo/api-template/commit/1f01e86))
+
 ## [1.0.2] - 2026-10-12 09:06:51 UTC
 
 ### Changes
